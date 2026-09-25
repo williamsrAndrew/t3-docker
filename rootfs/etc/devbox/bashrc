@@ -1,0 +1,19 @@
+# Shared shell setup for the dev box. Sourced from ~/.bashrc; edit ~/.bashrc for your own tweaks.
+[[ $- != *i* ]] && return
+
+HISTSIZE=100000
+HISTFILESIZE=200000
+HISTCONTROL=ignoreboth:erasedups
+shopt -s histappend checkwinsize globstar 2>/dev/null
+PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+
+[[ -f /usr/share/bash-completion/bash_completion ]] && . /usr/share/bash-completion/bash_completion
+[[ -f /usr/share/doc/fzf/examples/key-bindings.bash ]] && . /usr/share/doc/fzf/examples/key-bindings.bash
+command -v gh >/dev/null && eval "$(gh completion -s bash)"
+
+__git_branch() { git symbolic-ref --short HEAD 2>/dev/null | sed 's/.*/ (&)/'; }
+PS1='\[\e[35m\]t3-dev\[\e[0m\]:\[\e[34m\]\w\[\e[33m\]$(__git_branch)\[\e[0m\]\$ '
+
+alias ll='ls -alF --color=auto'
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'

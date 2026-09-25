@@ -1,0 +1,2 @@
+# Containers have no user namespaces for Chromium's sandbox; the container is the sandbox.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage"

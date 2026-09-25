@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Quick health report: tool versions, logins, persistence.
+[[ "$(id -u)" == 0 ]] && exec setpriv --reuid=dev --regid=dev --init-groups -- env HOME=/home/dev "$0" "$@"
+
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
+ver()  { local v; if v="$("$@" 2>/dev/null | head -n1)"; then ok "$1: $v"; else bad "$1: not found"; fi; }
+
+echo "Tools"
+ver t3 --version
+ver claude --version
+ver codex --version
+ver gh --version
+ver vercel --version
+ver node --version
+ver npm --version
+ver pnpm --version
+ver bun --version
+ver uv --version
+ver python --version
+ver chromium --version
+
+echo "Logins"
+[[ -f ~/.claude/.credentials.json || -n "${ANTHROPIC_API_KEY:-}" ]] && ok "claude" || bad "claude  → run: claude auth login"
+[[ -f ~/.codex/auth.json || -n "${OPENAI_API_KEY:-}" ]] && ok "codex" || bad "codex   → run: codex login --device-auth"
+gh auth status >/dev/null 2>&1 && ok "gh ($(gh api user --jq .login 2>/dev/null))" || bad "gh      → run: gh auth login"
+[[ -f ~/.local/share/com.vercel.cli/auth.json || -n "${VERCEL_TOKEN:-}" ]] && ok "vercel" || bad "vercel  → run: vercel login"
+git config user.email >/dev/null && ok "git identity: $(git config user.name) <$(git config user.email)>" || bad "git identity → set GIT_USER_NAME / GIT_USER_EMAIL"
+
+echo "Persistence"
+for d in /home/dev /workspace; do
+    if mountpoint -q "$d"; then ok "$d is a mounted volume"; else bad "$d is NOT mounted — data here is lost when the container is recreated"; fi
+done
+
+echo "T3 Code"
+curl -fsS "http://127.0.0.1:${T3CODE_PORT:-3773}/health" >/dev/null && ok "server healthy on :${T3CODE_PORT:-3773}" || bad "server not responding"
+[[ -n "${T3_PUBLIC_URL:-}" ]] && ok "public URL: $T3_PUBLIC_URL" || bad "T3_PUBLIC_URL unset (pairing links may be wrong)"

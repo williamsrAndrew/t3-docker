@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Runs as root under tini. Prepares the `dev` user and persistent home, then
+# hands off to supervisord, which runs T3 Code and ttyd as `dev`.
+set -euo pipefail
+
+log() { printf '[devbox] %s\n' "$*"; }
+as_dev() { setpriv --reuid=dev --regid=dev --init-groups --reset-env -- env \
+    HOME=/home/dev USER=dev LOGNAME=dev SHELL=/bin/bash PATH="$PATH" \
+    NPM_CONFIG_PREFIX="$NPM_CONFIG_PREFIX" BUN_INSTALL="$BUN_INSTALL" \
+    T3CODE_HOME="$T3CODE_HOME" "$@"; }
+
+# Anything other than the default command: run it as dev (e.g. `docker run ... bash`).
+if [[ $# -gt 0 ]]; then
+    exec setpriv --reuid=dev --regid=dev --init-groups -- "$@"
+fi
+
+# ── uid/gid remap ────────────────────────────────────────────────────────────
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+if [[ "$(id -g dev)" != "$PGID" ]]; then
+    log "setting dev gid to $PGID"
+    groupmod -o -g "$PGID" dev
+fi
+if [[ "$(id -u dev)" != "$PUID" ]]; then
+    log "setting dev uid to $PUID"
+    usermod -o -u "$PUID" dev
+fi
+
+# ── persistent home ──────────────────────────────────────────────────────────
+HOME_DIR=/home/dev
+mkdir -p "$HOME_DIR"
+# Seed dotfiles that don't exist yet (never overwrite the user's copies).
+cp -rn /etc/devbox/skel/. "$HOME_DIR/"
+mkdir -p "$HOME_DIR"/{.local/bin,.npm-global,.bun/bin,.config,.cache,.ssh} "$T3CODE_HOME"
+chmod 700 "$HOME_DIR/.ssh"
+
+# Re-own the home dir only when PUID/PGID changed since last start (or first run).
+stamp="$HOME_DIR/.config/devbox-owner"
+if [[ "$(cat "$stamp" 2>/dev/null)" != "$PUID:$PGID" ]]; then
+    log "fixing ownership of $HOME_DIR for $PUID:$PGID (one-time)"
+    chown -R "$PUID:$PGID" "$HOME_DIR"
+    echo "$PUID:$PGID" > "$stamp"
+    chown "$PUID:$PGID" "$stamp"
+fi
+# /workspace holds your code: only fix the top-level dir, never recurse.
+[[ -d /workspace ]] && chown "$PUID:$PGID" /workspace 2>/dev/null || true
+
+# ── sudo ─────────────────────────────────────────────────────────────────────
+if [[ "${ALLOW_SUDO,,}" == "true" ]]; then
+    echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
+    chmod 440 /etc/sudoers.d/dev
+else
+    rm -f /etc/sudoers.d/dev
+fi
+
+# ── timezone ─────────────────────────────────────────────────────────────────
+if [[ -n "${TZ:-}" && -f "/usr/share/zoneinfo/$TZ" ]]; then
+    ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
+    echo "$TZ" > /etc/timezone
+fi
+
+# ── git identity + GitHub credentials ────────────────────────────────────────
+[[ -n "${GIT_USER_NAME:-}" ]] && as_dev git config --global user.name "$GIT_USER_NAME"
+[[ -n "${GIT_USER_EMAIL:-}" ]] && as_dev git config --global user.email "$GIT_USER_EMAIL"
+as_dev git config --global --get init.defaultBranch >/dev/null || as_dev git config --global init.defaultBranch main
+as_dev git config --global --get-all safe.directory | grep -qx '/workspace/\*' \
+    || as_dev git config --global --add safe.directory '/workspace/*'
+# If gh is logged in (stored in ~/.config/gh or GH_TOKEN), let git use it for https remotes.
+if as_dev env GH_TOKEN="${GH_TOKEN:-}" gh auth status >/dev/null 2>&1; then
+    as_dev env GH_TOKEN="${GH_TOKEN:-}" gh auth setup-git >/dev/null 2>&1 || true
+fi
+
+# ── one-time agent setup (MCP servers) ───────────────────────────────────────
+if [[ ! -f "$HOME_DIR/.config/devbox-mcp-done" ]]; then
+    as_dev devbox-mcp-setup && as_dev touch "$HOME_DIR/.config/devbox-mcp-done" \
+        || log "MCP setup failed; run 'devbox-mcp-setup' manually"
+fi
+
+# ── web terminal ─────────────────────────────────────────────────────────────
+if [[ "${TTYD_ENABLE,,}" == "true" && -z "${TTYD_CREDENTIAL:-}" ]]; then
+    log "WARNING: TTYD_CREDENTIAL is empty, so the web terminal is disabled."
+    log "         Set TTYD_CREDENTIAL=user:password to enable it."
+    export TTYD_ENABLE=false
+fi
+export TTYD_AUTOSTART="${TTYD_ENABLE,,}"
+
+if [[ -z "${T3_PUBLIC_URL:-}" ]]; then
+    log "NOTE: T3_PUBLIC_URL is unset; pairing links will use a guessed address."
+fi
+
+log "starting services (T3 Code on :$T3CODE_PORT, ttyd on :$TTYD_PORT enabled=$TTYD_AUTOSTART)"
+exec /usr/bin/supervisord -n -c /etc/supervisor/devbox.conf

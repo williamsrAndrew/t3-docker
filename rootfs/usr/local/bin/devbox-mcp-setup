@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Register the headless-Chromium Playwright MCP server with Claude Code and Codex
+# (user scope, so it applies to every project). Safe to re-run.
+set -uo pipefail
+[[ "$(id -u)" == 0 ]] && exec setpriv --reuid=dev --regid=dev --init-groups -- env HOME=/home/dev "$0" "$@"
+
+mcp_cmd=(playwright-mcp --browser chromium --executable-path /usr/bin/chromium
+         --headless --no-sandbox --isolated)
+
+claude mcp remove --scope user playwright >/dev/null 2>&1
+claude mcp add --scope user playwright -- "${mcp_cmd[@]}" && echo "claude: playwright MCP registered"
+
+codex mcp remove playwright >/dev/null 2>&1
+codex mcp add playwright -- "${mcp_cmd[@]}" && echo "codex: playwright MCP registered"

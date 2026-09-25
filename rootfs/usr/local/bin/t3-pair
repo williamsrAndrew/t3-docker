@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Mint a one-time T3 Code pairing link that points at T3_PUBLIC_URL (the address
+# your other devices use), and show it as a QR code.
+#
+#   t3-pair                 # new link, valid for $T3_PAIR_TTL (default 30m)
+#   t3-pair --ttl 2h        # extra args go to `t3 auth pairing create`
+#   t3-pair --if-unpaired   # only print a link if no device has paired yet
+set -euo pipefail
+[[ "$(id -u)" == 0 ]] && exec setpriv --reuid=dev --regid=dev --init-groups -- env HOME=/home/dev "$0" "$@"
+
+base="${T3_PUBLIC_URL:-}"
+if [[ -z "$base" ]]; then
+    base="http://$(hostname -I | awk '{print $1}'):${T3CODE_PORT:-3773}"
+    echo "T3_PUBLIC_URL is unset; guessing $base (this is the container's address, which may not be reachable)." >&2
+fi
+base="${base%/}"
+
+if [[ "${1:-}" == "--if-unpaired" ]]; then
+    shift
+    sessions="$(t3 auth session list --json 2>/dev/null || echo '[]')"
+    if [[ "$(jq 'if type=="array" then length else (.sessions // []) | length end' <<<"$sessions" 2>/dev/null || echo 0)" != 0 ]]; then
+        echo "T3 Code already has paired devices. Run 't3-pair' for a link to pair another one."
+        exit 0
+    fi
+fi
+
+out="$(t3 auth pairing create --base-url "$base" --ttl "${T3_PAIR_TTL:-30m}" --label "${T3_PAIR_LABEL:-t3-pair}" --json "$@")"
+url="$(jq -r '.. | strings | select(test("/pair#token="))' <<<"$out" | head -n1)"
+if [[ -z "$url" ]]; then
+    echo "$out"
+    exit 1
+fi
+
+cat <<MSG
+
+  Pair a device with T3 Code (link expires in ${T3_PAIR_TTL:-30m}, single use):
+
+    $url
+
+MSG
+qrencode -t ANSIUTF8 -m 2 "$url" || true
+echo "  Open the link in a browser, or scan it with the T3 Code mobile app."

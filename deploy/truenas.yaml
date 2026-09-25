@@ -1,0 +1,26 @@
+# TrueNAS SCALE: Apps → Discover Apps → ⋮ → Install via YAML. Paste this, then edit
+# the values marked CHANGE. Create the two datasets first (see README).
+services:
+  t3-dev:
+    image: ghcr.io/williamsrandrew/t3-docker:latest
+    container_name: t3-dev
+    hostname: t3-dev
+    restart: unless-stopped
+    shm_size: 2g
+    ports:
+      - "3773:3773"
+      - "7681:7681"
+      - "3000-3010:3000-3010"
+      - "5173:5173"
+    volumes:
+      - /mnt/CHANGE-pool/apps/t3-dev/home:/home/dev          # CHANGE
+      - /mnt/CHANGE-pool/apps/t3-dev/workspace:/workspace    # CHANGE
+    environment:
+      PUID: "3000"          # CHANGE: owner uid of the datasets above
+      PGID: "3000"          # CHANGE: owner gid of the datasets above
+      TZ: America/Chicago   # CHANGE
+      T3_PUBLIC_URL: http://192.168.2.30:3773
+      TTYD_CREDENTIAL: "dev:CHANGE-ME"                      # CHANGE
+      GIT_USER_NAME: "CHANGE"
+      GIT_USER_EMAIL: "CHANGE@users.noreply.github.com"
+      ALLOW_SUDO: "true"

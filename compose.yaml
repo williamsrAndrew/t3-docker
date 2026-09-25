@@ -1,0 +1,25 @@
+# Generic docker compose deployment. Copy .env.example to .env and fill it in.
+#   docker compose up -d && docker compose logs -f
+# For TrueNAS, use deploy/truenas.yaml instead (TrueNAS doesn't read .env files).
+services:
+  t3-dev:
+    image: ${IMAGE:-ghcr.io/williamsrandrew/t3-docker:latest}
+    build: .
+    container_name: t3-dev
+    hostname: t3-dev
+    restart: unless-stopped
+    init: false            # tini is already PID 1
+    shm_size: 2g           # Chromium needs more than Docker's 64MB default
+    ports:
+      - "${T3CODE_PORT:-3773}:3773"   # T3 Code web UI / API
+      - "${TTYD_PORT:-7681}:7681"     # web terminal
+      - "3000-3010:3000-3010"         # dev servers (bind them to 0.0.0.0)
+      - "5173:5173"                   # vite
+    volumes:
+      # Everything in the dev user's home persists: T3 Code state (~/.t3),
+      # Claude (~/.claude, ~/.claude.json), Codex (~/.codex), gh (~/.config/gh),
+      # vercel, git config, ssh keys, shell history, user-installed npm/bun globals.
+      - ${DATA_DIR:-./data}/home:/home/dev
+      # Your projects.
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+    env_file: .env
