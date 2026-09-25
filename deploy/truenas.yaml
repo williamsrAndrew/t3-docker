@@ -1,6 +1,7 @@
 services:
   t3-dev:
     image: ghcr.io/williamsrandrew/t3-docker:latest
+    pull_policy: always           # Edit → Save in TrueNAS pulls the newest image
     container_name: t3-dev
     hostname: t3-dev
     restart: unless-stopped
