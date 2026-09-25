@@ -12,7 +12,7 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
 
 ## Quick start (TrueNAS SCALE)
 
-1. **Create two datasets**, for example `tank/apps/t3-dev/home` and `tank/apps/t3-dev/workspace`. Give them to your TrueNAS user and note that user's uid/gid (Credentials → Users; usually 3000+).
+1. **Create two datasets**, for example `tank/apps/t3-dev/home` and `tank/apps/t3-dev/workspace`, using the **Apps** dataset preset so they're owned by TrueNAS's `apps` user (uid/gid 568). The compose below already uses `PUID`/`PGID` 568. If you'd rather use your own TrueNAS user, set both to that user's uid/gid instead. The container remaps its `dev` user to match on startup.
 2. **Let TrueNAS pull the private image** (see [Private registry](#private-github-container-registry)).
 3. **Apps → Discover Apps → ⋮ → Install via YAML.** Name the app `t3-dev` and paste the compose below. Change every line marked `CHANGE`. (The same file is in [`deploy/truenas.yaml`](deploy/truenas.yaml).)
 
@@ -37,13 +37,19 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
          - /mnt/tank/apps/t3-dev/workspace:/workspace      # CHANGE pool/path
        environment:
          # Container user: must match the owner of the two datasets above.
-         PUID: "3000"                                      # CHANGE
-         PGID: "3000"                                      # CHANGE
+         PUID: "568"                                       # TrueNAS "apps" user
+         PGID: "568"                                       # TrueNAS "apps" group
          TZ: "America/Chicago"                             # CHANGE
 
          # T3 Code: the address your devices use; pairing links point here.
          T3_PUBLIC_URL: "http://192.168.2.30:3773"
          T3_PAIR_TTL: "30m"
+
+         # Username/password login for browsers instead of pairing links.
+         # Set a password to turn it on; leave it empty to use pairing only.
+         T3_LOGIN_USER: "dev"
+         T3_LOGIN_PASSWORD: "CHANGE-ME"                    # CHANGE
+         T3_LOGIN_DAYS: "365"                              # how long a browser stays signed in
 
          # Web terminal login (user:password). Empty = web terminal disabled.
          TTYD_CREDENTIAL: "dev:CHANGE-ME"                  # CHANGE
@@ -64,12 +70,7 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
          # VERCEL_TOKEN: ""
    ```
 
-4. **Pair your browser.** Open the app logs. Once the server is ready it prints a pairing link and QR code:
-   ```
-   Pair a device with T3 Code (link expires in 30m, single use):
-       http://192.168.2.30:3773/pair#token=...
-   ```
-   Open that link in your browser. **Ignore T3's own "Pairing URL" line above it.** That one uses the container's internal IP. You only do this once per browser or device; see [Staying signed in](#staying-signed-in).
+4. **Open `http://192.168.2.30:3773`** and sign in with `T3_LOGIN_USER` / `T3_LOGIN_PASSWORD`. You'll stay signed in for `T3_LOGIN_DAYS` (365 by default). To use pairing links instead, see [Signing in](#signing-in).
 5. **Sign in to your tools once.** Open the web terminal at `http://192.168.2.30:7681` and run:
    ```bash
    claude auth login          # prints a URL; finish in any browser
@@ -80,16 +81,32 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
    ```
    These logins are stored in the home volume and survive updates and recreates.
 
-## Staying signed in
+## Signing in
 
-Pairing is once per browser, not once per container start. Pairing gives that browser a session cookie that is valid for **30 days**. The sessions and the key that signs them are stored in `~/.t3` on the home volume, so restarting, updating or recreating the container keeps you signed in.
+There are two ways to get into the web UI. You can use both at once.
 
-You need a new link (`t3-pair`, or check the logs) only when:
-- you add a new browser or device, or use a private window
-- a browser's 30 days are up
-- you clear that browser's cookies or wipe the home dataset
+### Username and password (recommended on a LAN)
 
-The mobile app and T3 desktop app pair the same way: scan the QR code from `t3-pair`, or paste the link. To see or revoke paired devices, go to **Settings → Connections** in the web UI, or run `t3 auth session list`.
+Set `T3_LOGIN_PASSWORD` (and optionally `T3_LOGIN_USER`, default `dev`) to turn on a small login gate in front of T3 Code:
+
+```
+browser ─► :3773 login gate ─► T3 Code on internal :3772 (not published)
+```
+
+- Browsers get a login page. After you sign in, the gate sets a signed cookie that lasts `T3_LOGIN_DAYS` (default **365**). It forwards your requests to T3 with a long-lived T3 token that it keeps in `~/.t3/devbox-login-token`.
+- The cookie survives container restarts and image updates. Changing the username or password signs every browser out. To sign one browser out, go to `/__login/logout`.
+- The login allows 5 failed attempts per IP address per 15 minutes.
+- The **phone and desktop apps** still pair with a QR code from `t3-pair`. The gate passes their requests straight through, and T3 checks them itself.
+- The gate's T3 token shows up as `login-gate` under **Settings → Connections**. If you revoke it, every browser gets locked out until the gate issues a new one: run `supervisorctl restart login-gate` as root, or restart the container.
+- Security: the password is sent over plain HTTP, so anyone who can watch your LAN traffic could capture it. That's fine on a home LAN you trust. For anything more exposed, put HTTPS in front (Tailscale, or a reverse proxy).
+
+### Pairing links (T3's built-in method)
+
+With `T3_LOGIN_PASSWORD` empty, T3 uses its own device pairing. Open the one-time link from the app logs or `t3-pair`, then ignore T3's own "Pairing URL" line in the logs, since that one uses the container's internal IP. Pairing gives the browser a session that lasts **30 days**, a limit set inside T3 that can't be changed. It's stored on the home volume, so restarts don't sign you out. You need a new link for each new browser or device, and after 30 days.
+
+T3 also has **T3 Connect**: sign in with a T3 account on every device, with no pairing and access from anywhere. It goes through T3's cloud relay. Run `t3 connect` in the web terminal to set it up.
+
+To see or revoke paired devices, go to **Settings → Connections** in the web UI, or run `t3 auth session list`.
 
 ## Quick start (plain Docker)
 
@@ -103,7 +120,7 @@ docker compose logs -f t3-dev
 
 | Command | Does |
 |---|---|
-| `t3-pair` | Makes a new pairing link and QR code for another device (`--ttl 2h` to change the expiry) |
+| `t3-pair` | Makes a new pairing link and QR code for the phone or desktop app, or a browser when the login gate is off (`--ttl 2h` to change the expiry) |
 | `devbox-doctor` | Shows tool versions, login status, and whether the volumes are mounted |
 | `devbox-mcp-setup` | Re-registers the Playwright MCP server with Claude and Codex |
 | `supervisorctl restart t3code` | Restarts T3 Code (run as root: `docker exec t3-dev supervisorctl ...`) |
@@ -135,6 +152,10 @@ Everything under `/home/dev` is on your volume:
 | `TZ` | `UTC` | Timezone |
 | `T3_PUBLIC_URL` | — | The URL your devices use, e.g. `http://192.168.2.30:3773`. Pairing links point here. |
 | `T3_PAIR_TTL` | `30m` | How long `t3-pair` links stay valid |
+| `T3_LOGIN_PASSWORD` | — | Turns on the username/password login gate. Empty = pairing only. |
+| `T3_LOGIN_USER` | `dev` | Login gate username |
+| `T3_LOGIN_DAYS` | `365` | How long a browser stays signed in through the gate |
+| `T3_INTERNAL_PORT` | `3772` | Internal T3 port when the gate is on (not published) |
 | `TTYD_CREDENTIAL` | — | `user:password` for the web terminal. **Empty disables it.** |
 | `TTYD_ENABLE` | `true` | Set `false` to turn the web terminal off entirely |
 | `ALLOW_SUDO` | `true` | Passwordless sudo for `dev` (and therefore for agents) |
@@ -167,7 +188,7 @@ To let TrueNAS pull it:
 
 ## Security notes
 
-- T3 Code only accepts devices you've paired, but the connection is **plain HTTP**. Keep it on your LAN or VPN, and don't port-forward it to the internet. For remote access, T3's built-in `t3 connect` or Tailscale are the supported routes.
+- T3 Code only accepts paired devices or logged-in browsers, but the connection is **plain HTTP**. Keep it on your LAN or VPN, and don't port-forward it to the internet. For remote access, T3's built-in `t3 connect` or Tailscale are the supported routes.
 - ttyd uses HTTP basic auth over plain HTTP, and it gives a shell with (by default) sudo. Use a strong password, or set `TTYD_ENABLE=false` once your logins are done.
 - The server's startup logs contain a live pairing token. Treat the logs as sensitive.
 - Chromium runs with `--no-sandbox`. The container is the sandbox, so no extra privileges or `seccomp=unconfined` are needed.

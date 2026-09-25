@@ -122,6 +122,11 @@ ENV HOME=/home/dev \
     T3CODE_NO_BROWSER=true \
     T3_PUBLIC_URL="" \
     T3_PAIR_TTL=30m \
+    # optional username/password login in front of T3 Code (enabled when a password is set)
+    T3_LOGIN_USER=dev \
+    T3_LOGIN_PASSWORD="" \
+    T3_LOGIN_DAYS=365 \
+    T3_INTERNAL_PORT=3772 \
     # web terminal
     TTYD_ENABLE=true \
     TTYD_PORT=7681 \

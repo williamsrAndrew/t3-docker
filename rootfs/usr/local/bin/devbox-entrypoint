@@ -84,9 +84,19 @@ if [[ "${TTYD_ENABLE,,}" == "true" && -z "${TTYD_CREDENTIAL:-}" ]]; then
 fi
 export TTYD_AUTOSTART="${TTYD_ENABLE,,}"
 
+# ── optional login gate ──────────────────────────────────────────────────────
+if [[ -n "${T3_LOGIN_PASSWORD:-}" ]]; then
+    export LOGIN_GATE_AUTOSTART=true
+    export T3_SERVER_PORT="${T3_INTERNAL_PORT:-3772}"
+    log "login gate enabled: sign in as '${T3_LOGIN_USER:-dev}' at :$T3CODE_PORT"
+else
+    export LOGIN_GATE_AUTOSTART=false
+    export T3_SERVER_PORT="$T3CODE_PORT"
+fi
+
 if [[ -z "${T3_PUBLIC_URL:-}" ]]; then
     log "NOTE: T3_PUBLIC_URL is unset; pairing links will use a guessed address."
 fi
 
-log "starting services (T3 Code on :$T3CODE_PORT, ttyd on :$TTYD_PORT enabled=$TTYD_AUTOSTART)"
+log "starting services (T3 Code on :$T3_SERVER_PORT, ttyd on :$TTYD_PORT enabled=$TTYD_AUTOSTART)"
 exec /usr/bin/supervisord -n -c /etc/supervisor/devbox.conf

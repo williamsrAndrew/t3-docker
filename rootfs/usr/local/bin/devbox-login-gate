@@ -1,0 +1,302 @@
+#!/usr/bin/env node
+// Username/password login in front of T3 Code (enabled by setting T3_LOGIN_PASSWORD).
+//
+//   browser ──► :T3CODE_PORT (this gate) ──► T3 Code on 127.0.0.1:T3_SERVER_PORT
+//
+// - Browsers sign in once on a login page and get a signed cookie valid for
+//   T3_LOGIN_DAYS. Their requests are forwarded with a long-lived T3 session token.
+// - Requests that carry T3's own credentials (the mobile/desktop apps, pairing,
+//   OAuth) pass through untouched, so T3 still authenticates them itself.
+// - Everything else gets the login page (or 401).
+"use strict";
+const http = require("node:http");
+const net = require("node:net");
+const fs = require("node:fs");
+const crypto = require("node:crypto");
+const { execFileSync } = require("node:child_process");
+
+const LISTEN_PORT = Number(process.env.T3CODE_PORT || 3773);
+const UPSTREAM_PORT = Number(process.env.T3_SERVER_PORT || 3772);
+const UPSTREAM_HOST = "127.0.0.1";
+const USER = process.env.T3_LOGIN_USER || "dev";
+const PASSWORD = process.env.T3_LOGIN_PASSWORD || "";
+const DAYS = Number(process.env.T3_LOGIN_DAYS || 365);
+const STATE_DIR = process.env.T3CODE_HOME || `${process.env.HOME}/.t3`;
+const TOKEN_FILE = `${STATE_DIR}/devbox-login-token`;
+const SECRET_FILE = `${STATE_DIR}/devbox-login-secret`;
+const COOKIE = "devbox_login";
+const PREFIX = "/__login";
+
+const log = (msg) => console.log(`[login-gate] ${msg}`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+if (!PASSWORD) {
+  console.error("[login-gate] T3_LOGIN_PASSWORD is empty; refusing to start.");
+  process.exit(1);
+}
+
+// ── signing key: random, persisted, and mixed with the credentials so that
+//    changing T3_LOGIN_USER/PASSWORD signs every browser out ─────────────────
+function loadSecret() {
+  if (!fs.existsSync(SECRET_FILE)) {
+    fs.writeFileSync(SECRET_FILE, crypto.randomBytes(32).toString("hex"), { mode: 0o600 });
+  }
+  const base = fs.readFileSync(SECRET_FILE, "utf8").trim();
+  return crypto.createHmac("sha256", base).update(`${USER}\0${PASSWORD}`).digest();
+}
+const KEY = loadSecret();
+
+const sign = (payload) => crypto.createHmac("sha256", KEY).update(payload).digest("base64url");
+
+function makeCookie() {
+  const exp = Date.now() + DAYS * 86400_000;
+  const payload = Buffer.from(JSON.stringify({ u: USER, exp })).toString("base64url");
+  return `${payload}.${sign(payload)}`;
+}
+
+function validCookie(value) {
+  if (!value) return false;
+  const [payload, sig] = value.split(".");
+  if (!payload || !sig) return false;
+  const expected = Buffer.from(sign(payload));
+  const given = Buffer.from(sig);
+  if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return false;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString()).exp > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function parseCookies(header = "") {
+  const out = {};
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return out;
+}
+
+const safeEqual = (a, b) => {
+  const ha = crypto.createHash("sha256").update(a).digest();
+  const hb = crypto.createHash("sha256").update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+};
+
+// ── brute-force protection: 5 failures per IP per 15 minutes ────────────────
+const failures = new Map();
+function tooManyFailures(ip) {
+  const now = Date.now();
+  const recent = (failures.get(ip) || []).filter((t) => now - t < 15 * 60_000);
+  failures.set(ip, recent);
+  return recent.length >= 5;
+}
+const recordFailure = (ip) => failures.set(ip, [...(failures.get(ip) || []), Date.now()]);
+
+// ── upstream T3 session token ────────────────────────────────────────────────
+function upstreamGet(path, headers = {}) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: UPSTREAM_HOST, port: UPSTREAM_PORT, path, headers }, (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve({ status: res.statusCode, body }));
+    });
+    req.on("error", () => resolve({ status: 0, body: "" }));
+    req.setTimeout(5000, () => req.destroy());
+  });
+}
+
+async function tokenIsValid(token) {
+  const { body } = await upstreamGet("/api/auth/session", { authorization: `Bearer ${token}` });
+  try {
+    return JSON.parse(body).authenticated === true;
+  } catch {
+    return false;
+  }
+}
+
+// Reuses the saved token; mints a new one if it was revoked, expired, or the
+// T3 database was wiped.
+async function loadUpstreamToken() {
+  while ((await upstreamGet("/health")).status === 0) await sleep(1000);
+  let token = fs.existsSync(TOKEN_FILE) ? fs.readFileSync(TOKEN_FILE, "utf8").trim() : "";
+  if (!token || !(await tokenIsValid(token))) {
+    token = execFileSync(
+      "t3",
+      ["auth", "session", "issue", "--ttl", "3650d", "--label", "login-gate", "--token-only"],
+      { encoding: "utf8" },
+    ).trim();
+    fs.writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+    log("issued a new T3 session token for the login gate");
+  }
+  return token;
+}
+
+// ── request classification ───────────────────────────────────────────────────
+// Paths T3 authenticates on its own (pairing, app sign-in, discovery, health).
+const NATIVE_PATHS = ["/api/auth/", "/oauth/", "/.well-known/", "/health"];
+
+function carriesT3Credentials(req) {
+  if (req.headers.authorization || req.headers.dpop) return true;
+  if (NATIVE_PATHS.some((p) => req.url.startsWith(p))) return true;
+  // App WebSockets authenticate with a short-lived ticket in the query string.
+  const query = req.url.split("?")[1] || "";
+  return /(^|&)(ticket|token|wsToken)=/.test(query);
+}
+
+// Forward a logged-in browser's request with the gate's T3 token. The browser's
+// own T3 cookies are dropped: T3 prefers a cookie over the bearer header, so a
+// stale one from an earlier pairing would otherwise lock the browser out.
+function withGateAuth(headers, token) {
+  const out = { ...headers, authorization: `Bearer ${token}` };
+  const kept = Object.entries(parseCookies(headers.cookie))
+    .filter(([name]) => name !== COOKIE && !/^t3/i.test(name))
+    .map(([k, v]) => `${k}=${v}`);
+  if (kept.length) out.cookie = kept.join("; ");
+  else delete out.cookie;
+  return out;
+}
+
+// ── login page ───────────────────────────────────────────────────────────────
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+function loginPage(res, { error = "", next = "/" } = {}, status = 200) {
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "x-frame-options": "DENY",
+  });
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · T3 Code</title>
+<style>
+:root{color-scheme:light dark;--bg:#fafafa;--card:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#4f46e5}
+@media (prefers-color-scheme:dark){:root{--bg:#0a0a0a;--card:#161616;--fg:#f2f2f2;--muted:#999;--line:#2a2a2a;--accent:#818cf8}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:16px;box-sizing:border-box}
+form{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:28px;width:100%;max-width:340px;display:grid;gap:14px}
+h1{margin:0 0 4px;font-size:20px}p{margin:0;color:var(--muted);font-size:13px}
+label{display:grid;gap:6px;font-size:13px;color:var(--muted)}
+input{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button{font:inherit;font-weight:600;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+.err{color:#e5484d}
+</style></head><body>
+<form method="post" action="${PREFIX}">
+<h1>T3 Code</h1><p>Sign in to continue. You'll stay signed in for ${DAYS} days.</p>
+${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
+<label>Username<input name="username" autocomplete="username" autofocus required></label>
+<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+<input type="hidden" name="next" value="${escapeHtml(next)}">
+<button type="submit">Sign in</button>
+</form></body></html>`);
+}
+
+function readBody(req, limit = 8192) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > limit) reject(new Error("body too large"));
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
+// Only allow relative redirects back into this site.
+const safeNext = (next) => (typeof next === "string" && /^\/(?!\/)/.test(next) && !next.startsWith(PREFIX) ? next : "/");
+
+async function handleLogin(req, res) {
+  const ip = req.socket.remoteAddress || "?";
+  if (req.method === "GET") return loginPage(res, { next: safeNext(new URL(req.url, "http://x").searchParams.get("next")) });
+  if (req.method !== "POST") return loginPage(res, {}, 405);
+
+  const form = new URLSearchParams(await readBody(req).catch(() => ""));
+  const next = safeNext(form.get("next"));
+  if (tooManyFailures(ip)) {
+    log(`login blocked for ${ip} (too many failures)`);
+    return loginPage(res, { error: "Too many attempts. Try again in 15 minutes.", next }, 429);
+  }
+  if (safeEqual(form.get("username") || "", USER) && safeEqual(form.get("password") || "", PASSWORD)) {
+    failures.delete(ip);
+    log(`login ok from ${ip}`);
+    res.writeHead(303, {
+      location: next,
+      "set-cookie": `${COOKIE}=${makeCookie()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${DAYS * 86400}`,
+    });
+    return res.end();
+  }
+  recordFailure(ip);
+  log(`login failed from ${ip}`);
+  return loginPage(res, { error: "Wrong username or password.", next }, 401);
+}
+
+function handleLogout(res) {
+  res.writeHead(303, { location: PREFIX, "set-cookie": `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` });
+  res.end();
+}
+
+// ── proxy ────────────────────────────────────────────────────────────────────
+function proxy(req, res, headers) {
+  const upstream = http.request(
+    { host: UPSTREAM_HOST, port: UPSTREAM_PORT, method: req.method, path: req.url, headers },
+    (up) => {
+      res.writeHead(up.statusCode, up.statusMessage, up.rawHeaders);
+      up.pipe(res);
+    },
+  );
+  upstream.on("error", () => {
+    if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
+    res.end("T3 Code is not responding yet.\n");
+  });
+  req.pipe(upstream);
+}
+
+function proxyUpgrade(req, client, head, headers) {
+  const upstream = net.connect(UPSTREAM_PORT, UPSTREAM_HOST, () => {
+    let handshake = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
+    for (const [k, v] of Object.entries(headers)) {
+      for (const value of Array.isArray(v) ? v : [v]) handshake += `${k}: ${value}\r\n`;
+    }
+    upstream.write(`${handshake}\r\n`);
+    if (head.length) upstream.write(head);
+    client.pipe(upstream).pipe(client);
+  });
+  const close = () => { client.destroy(); upstream.destroy(); };
+  upstream.on("error", close);
+  client.on("error", close);
+}
+
+async function main() {
+  const token = await loadUpstreamToken();
+
+  const server = http.createServer((req, res) => {
+    const path = req.url.split("?")[0];
+    if (path === PREFIX) return void handleLogin(req, res).catch(() => loginPage(res, {}, 500));
+    if (path === `${PREFIX}/logout`) return handleLogout(res);
+
+    if (validCookie(parseCookies(req.headers.cookie)[COOKIE])) return proxy(req, res, withGateAuth(req.headers, token));
+    if (carriesT3Credentials(req)) return proxy(req, res, req.headers);
+
+    const wantsHtml = req.method === "GET" && (req.headers.accept || "").includes("text/html");
+    if (wantsHtml) {
+      res.writeHead(303, { location: `${PREFIX}?next=${encodeURIComponent(req.url)}` });
+      return res.end();
+    }
+    res.writeHead(401, { "content-type": "text/plain" });
+    res.end("Sign in required.\n");
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    if (validCookie(parseCookies(req.headers.cookie)[COOKIE])) return proxyUpgrade(req, socket, head, withGateAuth(req.headers, token));
+    if (carriesT3Credentials(req)) return proxyUpgrade(req, socket, head, req.headers);
+    socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+  });
+
+  server.listen(LISTEN_PORT, "0.0.0.0", () =>
+    log(`login required on :${LISTEN_PORT} (user "${USER}", ${DAYS}-day sessions) → T3 Code on :${UPSTREAM_PORT}`),
+  );
+}
+
+main().catch((err) => {
+  console.error(`[login-gate] ${err.stack || err}`);
+  process.exit(1);
+});
