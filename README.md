@@ -6,7 +6,7 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
 |---|---|
 | T3 Code web UI + server | `:3773` |
 | Web terminal (ttyd + tmux, basic auth) | `:7681` |
-| Your dev servers | `:3000-3010`, `:5173` |
+| Dev-server preview | `:3000` |
 
 **Included:** T3 Code, Claude Code, Codex, GitHub CLI, Vercel CLI, Node 24 LTS, npm, pnpm, bun, TypeScript/tsx, Python 3 + uv, a build toolchain, headless Chromium with a Playwright MCP server already registered for Claude and Codex, and git/git-lfs, ripgrep, fd, fzf, bat, jq, yq, tmux, htop, shellcheck, sqlite3, psql and redis-cli.
 
@@ -27,8 +27,7 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
        ports:
          - "3773:3773"               # T3 Code web UI
          - "7681:7681"               # web terminal (ttyd)
-         - "3000-3010:3000-3010"     # dev servers (Next.js, Express, ...)
-         - "5173:5173"               # Vite
+         - "3000:3000"               # one dev-server preview port (run your app on 3000, host 0.0.0.0)
        volumes:
          # Home dir: T3 threads + paired devices, Claude/Codex/gh/Vercel logins,
          # git config, SSH keys, shell history, your own global installs.
@@ -71,15 +70,15 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
    ```
 
 4. **Open `http://192.168.2.30:3773`** and sign in with `T3_LOGIN_USER` / `T3_LOGIN_PASSWORD`. You'll stay signed in for `T3_LOGIN_DAYS` (365 by default). To use pairing links instead, see [Signing in](#signing-in).
-5. **Sign in to your tools once.** Open the web terminal at `http://192.168.2.30:7681` and run:
+5. **Sign in to your tools once, from the T3 page.** T3's setup wizard (step 2, **Agents**) has a **Sign in** button next to each agent that isn't signed in. It opens a terminal inside the page with the command ready: press Enter. You can also open a terminal in any thread and run the commands yourself:
    ```bash
-   claude auth login          # prints a URL; finish in any browser
-   codex login --device-auth
-   gh auth login              # then git push/pull over https just works
+   claude auth login   # open the URL, approve, copy the code, paste it back, press Enter
+   codex login         # shows a URL and a short code; enter the code on that page
+   gh auth login       # choose "Login with a web browser"; also sets up git push/pull
    vercel login
-   devbox-doctor              # checks everything
+   devbox-doctor       # checks everything
    ```
-   These logins are stored in the home volume and survive updates and recreates.
+   These logins are stored in the home volume and survive updates and recreates. See [Signing in to tools](#signing-in-to-tools) if something doesn't work.
 
 ## Signing in
 
@@ -104,9 +103,20 @@ browser ─► :3773 login gate ─► T3 Code on internal :3772 (not published)
 
 With `T3_LOGIN_PASSWORD` empty, T3 uses its own device pairing. Open the one-time link from the app logs or `t3-pair`, then ignore T3's own "Pairing URL" line in the logs, since that one uses the container's internal IP. Pairing gives the browser a session that lasts **30 days**, a limit set inside T3 that can't be changed. It's stored on the home volume, so restarts don't sign you out. You need a new link for each new browser or device, and after 30 days.
 
-T3 also has **T3 Connect**: sign in with a T3 account on every device, with no pairing and access from anywhere. It goes through T3's cloud relay. Run `t3 connect` in the web terminal to set it up.
+T3 also has **T3 Connect**: sign in with a T3 account on every device, with no pairing and access from anywhere. It goes through T3's cloud relay. Run `t3 connect` in a terminal to set it up.
 
 To see or revoke paired devices, go to **Settings → Connections** in the web UI, or run `t3 auth session list`.
+
+## Signing in to tools
+
+- **Pasting.**
+  - In **T3's terminal**: **Ctrl+Shift+V** or **Shift+Insert** on Windows/Linux, **Cmd+V** on Mac. Plain Ctrl+V goes to the program, as it does in desktop terminals.
+  - In the **web terminal (ttyd)**: plain **Ctrl+V** pastes too.
+  - Right-click → Paste may not work, because browsers disable the clipboard API on plain-HTTP pages.
+- **Claude's "Paste code here" prompt shows nothing as you paste or type.** That's normal: the code is hidden like a password. Paste once and press Enter.
+- **Claude may show as "Authenticated" in T3 before you've signed in.** T3's check only confirms the CLI starts. If there's no Sign in button, run `claude auth login` in a terminal anyway. `claude auth status` shows the real state.
+- **`codex login` automatically uses the device-code flow** (`--device-auth`). The normal flow expects a browser on the same machine and can't finish on a server.
+- The web terminal on `:7681` is a fallback for when T3 isn't running. Set `TTYD_ENABLE=false` if you don't need it.
 
 ## Quick start (plain Docker)
 
@@ -166,7 +176,7 @@ Everything under `/home/dev` is on your volume:
 | `CHOKIDAR_USEPOLLING`, `WATCHPACK_POLLING` | — | Set `true` if `/workspace` is on SMB/NFS and hot reload misses changes |
 | `T3CODE_PORT`, `TTYD_PORT` | `3773`, `7681` | Internal ports (change the published ports instead) |
 
-**Dev servers** must listen on `0.0.0.0` to be reachable from your LAN (for example `vite --host`, `next dev -H 0.0.0.0`). Then open `http://192.168.2.30:5173`.
+**Dev-server preview:** one port, `3000`, is published so you can open a running app from your laptop. Start the app on that port, listening on all interfaces: `vite --host 0.0.0.0 --port 3000`, `next dev -H 0.0.0.0 -p 3000`, or `PORT=3000 HOST=0.0.0.0 npm start`. Then open `http://192.168.2.30:3000`. Agents don't need it: they test apps inside the container with the built-in headless Chromium. If 3000 is taken on TrueNAS, change only the left side (for example `"3100:3000"`), or remove the line.
 
 ## Private GitHub Container Registry
 

@@ -108,7 +108,20 @@ RUN usermod -l dev -d /home/dev -m -s /bin/bash node \
     && chown dev:dev /workspace
 
 COPY --chmod=0755 rootfs/usr/local/bin/ /usr/local/bin/
+COPY --chmod=0755 rootfs/usr/local/devbox/bin/ /usr/local/devbox/bin/
+COPY rootfs/usr/local/share/devbox/ /usr/local/share/devbox/
 COPY rootfs/etc/ /etc/
+
+# ttyd's built-in page + a small script that makes Ctrl+V paste.
+RUN ttyd --port 7999 --interface lo true & pid=$!; \
+    for _ in $(seq 40); do curl -fsS http://127.0.0.1:7999/ -o /tmp/ttyd.html && break; sleep 0.25; done; \
+    kill "$pid"; \
+    grep -q '</body>' /tmp/ttyd.html \
+    && perl -0pe 'BEGIN { local $/; open F, "/usr/local/share/devbox/ttyd-paste.html" or die; $js = <F> } s{</body>}{$js</body>}' \
+        /tmp/ttyd.html > /tmp/ttyd-patched.html \
+    && grep -q 'plainCtrlV' /tmp/ttyd-patched.html \
+    && mv /tmp/ttyd-patched.html /usr/local/share/devbox/ttyd-index.html \
+    && rm -f /tmp/ttyd.html
 
 ENV HOME=/home/dev \
     SHELL=/bin/bash \
@@ -138,7 +151,7 @@ ENV HOME=/home/dev \
     # user-level installs land on the persistent volume and win over image versions
     NPM_CONFIG_PREFIX=/home/dev/.npm-global \
     BUN_INSTALL=/home/dev/.bun \
-    PATH=/home/dev/.local/bin:/home/dev/.npm-global/bin:/home/dev/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/home/dev/.local/bin:/home/dev/.npm-global/bin:/home/dev/.bun/bin:/usr/local/devbox/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     # image-managed CLIs are updated by rebuilding, not in place
     DISABLE_AUTOUPDATER=1 \
     # browsers

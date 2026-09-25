@@ -1,0 +1,17 @@
+<script>
+// devbox: make plain Ctrl+V paste text (xterm.js otherwise sends ^V to the shell).
+// Claude Code's Ctrl+V image paste can't reach your computer's clipboard from here anyway.
+(function () {
+  var timer = setInterval(function () {
+    var term = window.term;
+    if (!term) return;
+    clearInterval(timer);
+    if (/Mac|iPhone|iPad/.test(navigator.platform)) return; // Cmd+V already pastes
+    term.attachCustomKeyEventHandler(function (e) {
+      var plainCtrlV = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === "v" || e.key === "V");
+      // Returning false lets the browser run its native paste into the terminal.
+      return !(plainCtrlV && e.type === "keydown");
+    });
+  }, 200);
+})();
+</script>

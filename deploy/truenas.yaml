@@ -8,8 +8,7 @@ services:
     ports:
       - "3773:3773"               # T3 Code web UI
       - "7681:7681"               # web terminal (ttyd)
-      - "3000-3010:3000-3010"     # dev servers (Next.js, Express, ...)
-      - "5173:5173"               # Vite
+      - "3000:3000"               # one dev-server preview port (run your app on 3000, host 0.0.0.0)
     volumes:
       # Home dir: T3 threads + paired devices, Claude/Codex/gh/Vercel logins,
       # git config, SSH keys, shell history, your own global installs.
