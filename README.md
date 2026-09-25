@@ -12,15 +12,64 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
 
 ## Quick start (TrueNAS SCALE)
 
-1. **Create two datasets**, for example `apps/t3-dev/home` and `apps/t3-dev/workspace`. Give them to your TrueNAS user. Note that user's uid/gid (Credentials → Users; usually 3000+).
+1. **Create two datasets**, for example `tank/apps/t3-dev/home` and `tank/apps/t3-dev/workspace`. Give them to your TrueNAS user and note that user's uid/gid (Credentials → Users; usually 3000+).
 2. **Let TrueNAS pull the private image** (see [Private registry](#private-github-container-registry)).
-3. **Apps → Discover Apps → ⋮ → Install via YAML.** Paste [`deploy/truenas.yaml`](deploy/truenas.yaml) and fill in every `CHANGE`.
-4. **Open the app logs.** Once the server is ready it prints a pairing link and QR code:
+3. **Apps → Discover Apps → ⋮ → Install via YAML.** Name the app `t3-dev` and paste the compose below. Change every line marked `CHANGE`. (The same file is in [`deploy/truenas.yaml`](deploy/truenas.yaml).)
+
+   ```yaml
+   services:
+     t3-dev:
+       image: ghcr.io/williamsrandrew/t3-docker:latest
+       container_name: t3-dev
+       hostname: t3-dev
+       restart: unless-stopped
+       shm_size: 2g                  # Chromium needs more than Docker's 64MB default
+       ports:
+         - "3773:3773"               # T3 Code web UI
+         - "7681:7681"               # web terminal (ttyd)
+         - "3000-3010:3000-3010"     # dev servers (Next.js, Express, ...)
+         - "5173:5173"               # Vite
+       volumes:
+         # Home dir: T3 threads + paired devices, Claude/Codex/gh/Vercel logins,
+         # git config, SSH keys, shell history, your own global installs.
+         - /mnt/tank/apps/t3-dev/home:/home/dev            # CHANGE pool/path
+         # Your projects.
+         - /mnt/tank/apps/t3-dev/workspace:/workspace      # CHANGE pool/path
+       environment:
+         # Container user: must match the owner of the two datasets above.
+         PUID: "3000"                                      # CHANGE
+         PGID: "3000"                                      # CHANGE
+         TZ: "America/Chicago"                             # CHANGE
+
+         # T3 Code: the address your devices use; pairing links point here.
+         T3_PUBLIC_URL: "http://192.168.2.30:3773"
+         T3_PAIR_TTL: "30m"
+
+         # Web terminal login (user:password). Empty = web terminal disabled.
+         TTYD_CREDENTIAL: "dev:CHANGE-ME"                  # CHANGE
+         TTYD_ENABLE: "true"
+
+         # Git identity for commits made in the container.
+         GIT_USER_NAME: "Your Name"                        # CHANGE
+         GIT_USER_EMAIL: "you@users.noreply.github.com"    # CHANGE
+
+         # Passwordless sudo for the dev user (and the agents).
+         ALLOW_SUDO: "true"
+         NODE_OPTIONS: "--max-old-space-size=4096"
+
+         # Optional: uncomment instead of logging in interactively.
+         # GH_TOKEN: ""
+         # ANTHROPIC_API_KEY: ""
+         # OPENAI_API_KEY: ""
+         # VERCEL_TOKEN: ""
+   ```
+
+4. **Pair your browser.** Open the app logs. Once the server is ready it prints a pairing link and QR code:
    ```
    Pair a device with T3 Code (link expires in 30m, single use):
        http://192.168.2.30:3773/pair#token=...
    ```
-   Use that link. **Ignore T3's own "Pairing URL" line above it.** That one uses the container's internal IP.
+   Open that link in your browser. **Ignore T3's own "Pairing URL" line above it.** That one uses the container's internal IP. You only do this once per browser or device; see [Staying signed in](#staying-signed-in).
 5. **Sign in to your tools once.** Open the web terminal at `http://192.168.2.30:7681` and run:
    ```bash
    claude auth login          # prints a URL; finish in any browser
@@ -30,6 +79,17 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
    devbox-doctor              # checks everything
    ```
    These logins are stored in the home volume and survive updates and recreates.
+
+## Staying signed in
+
+Pairing is once per browser, not once per container start. Pairing gives that browser a session cookie that is valid for **30 days**. The sessions and the key that signs them are stored in `~/.t3` on the home volume, so restarting, updating or recreating the container keeps you signed in.
+
+You need a new link (`t3-pair`, or check the logs) only when:
+- you add a new browser or device, or use a private window
+- a browser's 30 days are up
+- you clear that browser's cookies or wipe the home dataset
+
+The mobile app and T3 desktop app pair the same way: scan the QR code from `t3-pair`, or paste the link. To see or revoke paired devices, go to **Settings → Connections** in the web UI, or run `t3 auth session list`.
 
 ## Quick start (plain Docker)
 
