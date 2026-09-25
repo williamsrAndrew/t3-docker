@@ -139,9 +139,10 @@ const NATIVE_PATHS = ["/api/auth/", "/oauth/", "/.well-known/", "/health"];
 function carriesT3Credentials(req) {
   if (req.headers.authorization || req.headers.dpop) return true;
   if (NATIVE_PATHS.some((p) => req.url.startsWith(p))) return true;
-  // App WebSockets authenticate with a short-lived ticket in the query string.
-  const query = req.url.split("?")[1] || "";
-  return /(^|&)(ticket|token|wsToken)=/.test(query);
+  // App WebSockets (/ws, device streams) authenticate with a short-lived ticket
+  // from /api/auth/websocket-ticket, passed as ?wsTicket=... (T3's
+  // WEBSOCKET_TICKET_QUERY_PARAM). T3 validates it.
+  return new URL(req.url, "http://gate").searchParams.has("wsTicket");
 }
 
 // Forward a logged-in browser's request with the gate's T3 token. The browser's
