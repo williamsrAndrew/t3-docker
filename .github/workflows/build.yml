@@ -63,7 +63,7 @@ jobs:
         run: |
           want="${{ steps.latest.outputs.t3code }}|${{ steps.latest.outputs.claude }}|${{ steps.latest.outputs.codex }}"
           # The image is an index (image + provenance attestation); read the amd64 config.
-          if raw="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json (index .Image "linux/amd64")}}' 2>err.txt)"; then
+          if raw="$(docker buildx imagetools inspect "${IMAGE,,}:latest" --format '{{json (index .Image "linux/amd64")}}' 2>err.txt)"; then
             labels="$(jq -c '.config.Labels // {}' <<<"$raw")"
           else
             echo "::warning::could not read published image labels: $(cat err.txt)"
