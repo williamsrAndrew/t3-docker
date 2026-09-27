@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Runs T3 Code under its own service launcher (`t3 __service-launcher`, what
+# `t3 service install` sets up with systemd). The launcher lets the T3 apps
+# update this server in place ("Update server"), keeping new versions in
+# ~/.t3/runtime on the home volume.
+#
+# Before starting, pick the newest installed runtime (the image's or one T3
+# downloaded) and record it in the launcher's state file.
+set -uo pipefail
+
+T3_HOME="${T3CODE_HOME:?}"
+RUNTIME="$T3_HOME/runtime"
+STATE="$RUNTIME/service-state.json"
+
+log() { printf '[devbox-t3] %s\n' "$*"; }
+newer() { [[ -n "$1" && "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]; }
+complete() { [[ -n "$1" && -f "$RUNTIME/versions/$1/.install-complete" && -x "$RUNTIME/versions/$1/t3" ]]; }
+
+devbox-update --sync >/dev/null
+
+active="$(jq -r '.activeVersion // empty' "$STATE" 2>/dev/null)"
+pending="$(jq -r '.update.status // empty' "$STATE" 2>/dev/null)"
+newest=""
+for d in "$RUNTIME/versions"/*/; do
+    v="$(basename "$d")"
+    complete "$v" || continue
+    [[ "$v" == *-* && "$v" != "$active" ]] && continue   # ignore nightlies unless chosen in T3
+    if [[ -z "$newest" ]] || newer "$v" "$newest"; then newest="$v"; fi
+done
+[[ -n "$newest" ]] || { log "no T3 Code runtime found"; exit 1; }
+
+# The launcher's state format is internal to T3 and has changed between
+# releases (protocol 1, 2, 3...). Keep the recorded protocol when possible,
+# otherwise find the one this runtime accepts: a wrong one fails instantly.
+write_state() { printf '{"protocol":%s,"activeVersion":"%s"}\n' "$1" "$2" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"; }
+launcher_accepts_state() {
+    local out
+    out="$(timeout -s TERM 5 "$RUNTIME/versions/$1/t3" __service-launcher 2>&1)"
+    ! grep -q "invalid or unsupported" <<<"$out"
+}
+
+if [[ "$pending" == "pending" ]] && complete "$active"; then
+    target="$active"   # an update is mid-flight; let the launcher finish or roll it back
+    log "resuming T3 Code $target (update in progress)"
+elif complete "$active" && ! newer "$newest" "$active"; then
+    target="$active"
+else
+    target="$newest"
+    log "switching T3 Code to $target${active:+ (was $active)}"
+    old_protocol="$(jq -r '.protocol // empty' "$STATE" 2>/dev/null)"
+    found=""
+    for p in $old_protocol 3 2 1 4 5 6 7 8 9; do
+        write_state "$p" "$target"
+        if launcher_accepts_state "$target"; then found="$p"; break; fi
+    done
+    [[ -n "$found" ]] || { log "T3 Code $target rejected every launcher state format"; exit 1; }
+fi
+
+# `t3` on PATH (pairing, auth commands) must match the running server, which
+# can change while it runs when an update is applied from the T3 apps.
+mkdir -p "$HOME/.local/bin"
+rm -f "$HOME/.local/bin/t3"
+cat > "$HOME/.local/bin/t3" <<EOF
+#!/bin/sh
+# Written by devbox-t3: runs the T3 Code version the service launcher is using.
+v=\$(jq -r '.activeVersion // empty' "$STATE" 2>/dev/null)
+[ -x "$RUNTIME/versions/\$v/t3" ] || v="$target"
+exec "$RUNTIME/versions/\$v/t3" "\$@"
+EOF
+chmod +x "$HOME/.local/bin/t3"
+
+log "starting T3 Code $target under the service launcher"
+cd /workspace || exit 1
+exec "$RUNTIME/versions/$target/t3" __service-launcher

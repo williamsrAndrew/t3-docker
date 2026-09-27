@@ -6,8 +6,10 @@ on:
     tags: ["v*"]
     paths-ignore: ["**.md", "deploy/**"]
   pull_request:
-  # Weekly rebuild picks up new Claude Code / Codex / T3 Code / security releases.
   schedule:
+    # Every 3 hours: rebuild only if T3 Code, Claude Code or Codex released a new version.
+    - cron: "23 */3 * * *"
+    # Weekly: full rebuild without cache, for Debian security updates and the other tools.
     - cron: "0 9 * * 1"
   workflow_dispatch:
     inputs:
@@ -21,10 +23,64 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      t3code: ${{ steps.latest.outputs.t3code }}
+      claude: ${{ steps.latest.outputs.claude }}
+      codex: ${{ steps.latest.outputs.codex }}
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - name: Resolve latest versions
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          t3code="${{ inputs.t3code_version }}"
+          [ -n "$t3code" ] || t3code="$(gh api repos/pingdotgg/t3code/releases/latest --jq .tag_name | sed 's/^v//')"
+          claude="$(npm view @anthropic-ai/claude-code version)"
+          codex="$(npm view @openai/codex version)"
+          for v in "$t3code" "$claude" "$codex"; do [ -n "$v" ] || { echo "version lookup failed"; exit 1; }; done
+          echo "t3code=$t3code" >> "$GITHUB_OUTPUT"
+          echo "claude=$claude" >> "$GITHUB_OUTPUT"
+          echo "codex=$codex" >> "$GITHUB_OUTPUT"
+          echo "Latest: T3 Code $t3code, Claude Code $claude, Codex $codex" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare with the published image
+        id: compare
+        run: |
+          want="${{ steps.latest.outputs.t3code }}|${{ steps.latest.outputs.claude }}|${{ steps.latest.outputs.codex }}"
+          labels="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Image}}' 2>/dev/null \
+            | jq -c '[.. | objects | select(has("Labels")) | .Labels] | map(select(. != null)) | first // {}' || echo '{}')"
+          have="$(jq -r '[."dev.t3docker.version.t3code", ."dev.t3docker.version.claude-code", ."dev.t3docker.version.codex"] | map(. // "") | join("|")' <<<"$labels")"
+          echo "published: $have" && echo "latest:    $want"
+          if [ "$have" = "$want" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Published image is current ($have)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "New versions: $have → $want" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   build:
+    needs: versions
+    # Scheduled version checks only build when something changed; everything else always builds.
+    if: >-
+      github.event_name != 'schedule'
+      || github.event.schedule == '0 9 * * 1'
+      || needs.versions.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,13 +98,13 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
-            type=schedule,pattern={{date 'YYYYMMDD'}}
+            type=raw,value=t3-${{ needs.versions.outputs.t3code }},enable={{is_default_branch}}
 
       - uses: docker/build-push-action@v6
         with:
@@ -59,8 +115,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            T3CODE_VERSION=${{ inputs.t3code_version }}
+            T3CODE_VERSION=${{ needs.versions.outputs.t3code }}
+            CLAUDE_CODE_VERSION=${{ needs.versions.outputs.claude }}
+            CODEX_VERSION=${{ needs.versions.outputs.codex }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Weekly builds must not reuse cached layers, or the CLIs never update.
-          no-cache: ${{ github.event_name == 'schedule' }}
+          # The weekly build skips the cache so Debian packages and other tools refresh.
+          no-cache: ${{ github.event.schedule == '0 9 * * 1' }}

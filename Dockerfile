@@ -16,6 +16,9 @@ ARG TARGETARCH
 # Empty = latest stable. Pin (e.g. 0.0.42) for reproducible builds.
 ARG T3CODE_VERSION=""
 ARG T3CODE_CHANNEL=stable
+# npm versions of the agent CLIs ("latest" or exact). CI passes exact versions.
+ARG CLAUDE_CODE_VERSION=latest
+ARG CODEX_VERSION=latest
 ARG TTYD_VERSION=1.7.7
 ARG YQ_VERSION=v4.53.6
 # Extra global npm packages to bake in, space separated (e.g. "opencode-ai @google/gemini-cli").
@@ -80,11 +83,12 @@ RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash \
     && bun --version && uv --version
 
 # ── Global npm tooling ───────────────────────────────────────────────────────
-# Agent CLIs update fast; rebuild the image (CI does it weekly) to pick up new versions.
-RUN npm install -g --no-fund --no-audit \
+# Claude Code and Codex here are the image's copies; at startup they're copied
+# to ~/.npm-global (see devbox-update), where updates persist.
+RUN npm install -g --no-fund --no-audit --allow-scripts=@anthropic-ai/claude-code \
         npm@latest pnpm \
-        @anthropic-ai/claude-code \
-        @openai/codex \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@openai/codex@${CODEX_VERSION}" \
         vercel \
         typescript tsx nodemon serve prettier \
         @playwright/mcp \
@@ -108,7 +112,6 @@ RUN usermod -l dev -d /home/dev -m -s /bin/bash node \
     && chown dev:dev /workspace
 
 COPY --chmod=0755 rootfs/usr/local/bin/ /usr/local/bin/
-COPY --chmod=0755 rootfs/usr/local/devbox/bin/ /usr/local/devbox/bin/
 COPY rootfs/usr/local/share/devbox/ /usr/local/share/devbox/
 COPY rootfs/etc/ /etc/
 
@@ -149,11 +152,16 @@ ENV SHELL=/bin/bash \
     ALLOW_SUDO=true \
     GIT_USER_NAME="" \
     GIT_USER_EMAIL="" \
-    # user-level installs land on the persistent volume and win over image versions
+    # Updates: T3 Code, Claude Code and Codex live on the home volume (T3's
+    # "Update server" / "Update now" work); AUTO_UPDATE installs new releases
+    # at every start.
+    AUTO_UPDATE=true \
     NPM_CONFIG_PREFIX=/home/dev/.npm-global \
+    # npm 12 skips install scripts by default; Claude's puts its binary in place.
+    NPM_CONFIG_ALLOW_SCRIPTS=@anthropic-ai/claude-code \
     BUN_INSTALL=/home/dev/.bun \
-    PATH=/usr/local/devbox/bin:/home/dev/.local/bin:/home/dev/.npm-global/bin:/home/dev/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    # image-managed CLIs are updated by rebuilding, not in place
+    PATH=/home/dev/.local/bin:/home/dev/.npm-global/bin:/home/dev/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    # Claude's own background updater stays off; devbox-update and T3 handle it.
     DISABLE_AUTOUPDATER=1 \
     # browsers
     CHROME_PATH=/usr/bin/chromium \
@@ -168,6 +176,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${T3CODE_PORT}/health" >/dev/null || exit 1
 
 LABEL org.opencontainers.image.title="t3-docker" \
+      dev.t3docker.version.t3code="${T3CODE_VERSION}" \
+      dev.t3docker.version.claude-code="${CLAUDE_CODE_VERSION}" \
+      dev.t3docker.version.codex="${CODEX_VERSION}" \
       org.opencontainers.image.description="Remote dev box: T3 Code + Claude Code + Codex + gh + vercel + node/bun + headless Chromium"
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/devbox-entrypoint"]

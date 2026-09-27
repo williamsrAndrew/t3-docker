@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Started once by supervisord after boot (as root, so it can restart T3).
+set -uo pipefail
+[[ "${AUTO_UPDATE,,}" == "true" ]] || exit 0
+
+state="${T3CODE_HOME:?}/runtime/service-state.json"
+for _ in $(seq 90); do
+    curl -fsS "http://127.0.0.1:${T3_SERVER_PORT:-$T3CODE_PORT}/health" >/dev/null 2>&1 && break
+    sleep 2
+done
+
+# Highest stable version installed (nightlies have a "-" suffix and are skipped).
+highest() {
+    local d
+    for d in "$T3CODE_HOME"/runtime/versions/*; do
+        d="${d##*/}"; [[ "$d" == *-* || "$d" == "*" ]] || echo "$d"
+    done | sort -V | tail -n1
+}
+before="$(highest)"
+devbox-update
+after="$(highest)"
+
+# A new T3 runtime was downloaded: restart T3 so devbox-t3 switches to it.
+if [[ "$before" != "$after" && "$(jq -r '.update.status // empty' "$state" 2>/dev/null)" != "pending" ]]; then
+    echo "[devbox-update] restarting T3 Code to use the new version"
+    supervisorctl -c /etc/supervisor/devbox.conf restart t3code
+fi

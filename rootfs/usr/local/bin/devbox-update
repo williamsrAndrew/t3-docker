@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Keeps T3 Code, Claude Code and Codex current on the persistent home volume.
+#
+# The live copies live in your home folder so updates persist and T3's own
+# "Update now" / "Update server" buttons can manage them:
+#   Claude Code, Codex  → ~/.npm-global   (T3 sees a normal npm global install)
+#   T3 Code runtime     → ~/.t3/runtime/versions/<version>
+# The image ships a copy of each; whichever is newer wins.
+#
+#   devbox-update            sync from the image, then install newer releases
+#   devbox-update --sync     only sync from the image (no network)
+#
+# Runs at every container start (latest releases only when AUTO_UPDATE=true).
+set -uo pipefail
+[[ "$(id -u)" == 0 ]] && exec setpriv --reuid=dev --regid=dev --init-groups -- env HOME=/home/dev "$0" "$@"
+
+MODE="${1:-all}"
+PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+T3_HOME="${T3CODE_HOME:-$HOME/.t3}"
+IMAGE_NODE_MODULES=/usr/local/lib/node_modules
+IMAGE_T3_VERSIONS=/opt/t3/runtime/versions
+NPM_PACKAGES=(@anthropic-ai/claude-code @openai/codex)
+
+log() { printf '[devbox-update] %s\n' "$*"; }
+# True when $1 is a newer version than $2 (either may be empty).
+newer() { [[ -n "$1" && "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]; }
+pkg_version() { jq -r '.version // empty' "$1/package.json" 2>/dev/null; }
+
+# Put a copy of the image's package into the home prefix, laid out exactly as
+# `npm install -g` would (package dir + bin symlinks), so npm and T3 treat it
+# as a normal global install.
+seed_from_image() {
+    local pkg="$1" src="$IMAGE_NODE_MODULES/$1" dest="$PREFIX/lib/node_modules/$1"
+    local tmp="$dest.devbox-tmp"
+    mkdir -p "$(dirname "$dest")" "$PREFIX/bin"
+    rm -rf "$tmp" && cp -a "$src" "$tmp" && rm -rf "$dest" && mv "$tmp" "$dest" || return 1
+    jq -r '.bin // {} | to_entries[] | "\(.key)\t\(.value)"' "$dest/package.json" |
+        while IFS=$'\t' read -r name rel; do
+            ln -sfn "../lib/node_modules/$pkg/$rel" "$PREFIX/bin/$name"
+        done
+}
+
+# npm 12 skips install scripts unless allowed; Claude's postinstall is what puts
+# its native binary in place. Finish any install that was left with the stub.
+heal_claude() {
+    local dir="$PREFIX/lib/node_modules/@anthropic-ai/claude-code"
+    [[ -f "$dir/install.cjs" ]] || return 0
+    [[ "$(stat -c %s "$dir/bin/claude.exe" 2>/dev/null || echo 0)" -gt 10000000 ]] && return 0
+    log "finishing an incomplete Claude Code install"
+    (cd "$dir" && node install.cjs >/dev/null 2>&1) || log "could not repair Claude Code; run: devbox-update"
+}
+
+sync_npm_tools() {
+    local pkg home_v image_v
+    for pkg in "${NPM_PACKAGES[@]}"; do
+        home_v="$(pkg_version "$PREFIX/lib/node_modules/$pkg")"
+        image_v="$(pkg_version "$IMAGE_NODE_MODULES/$pkg")"
+        if [[ -z "$home_v" ]] || newer "$image_v" "$home_v"; then
+            log "$pkg: using image version $image_v${home_v:+ (was $home_v)}"
+            seed_from_image "$pkg" || log "$pkg: copy from image failed"
+        fi
+    done
+    heal_claude
+}
+
+update_npm_tools() {
+    local pkg current latest
+    for pkg in "${NPM_PACKAGES[@]}"; do
+        current="$(pkg_version "$PREFIX/lib/node_modules/$pkg")"
+        latest="$(timeout 30 npm view "$pkg" version 2>/dev/null)" || { log "$pkg: couldn't check for updates"; continue; }
+        if newer "$latest" "$current"; then
+            log "$pkg: updating $current → $latest"
+            timeout 300 npm install -g --no-fund --no-audit --prefix "$PREFIX" \
+                --allow-scripts="$pkg" "$pkg@$latest" >/dev/null 2>&1 \
+                || log "$pkg: update failed; keeping $current"
+        fi
+    done
+    heal_claude
+}
+
+# The image's T3 runtime is linked into ~/.t3/runtime/versions so the service
+# launcher can run it alongside versions installed by "Update server".
+sync_t3_runtime() {
+    local dir v
+    mkdir -p "$T3_HOME/runtime/versions"
+    for dir in "$IMAGE_T3_VERSIONS"/*/; do
+        v="$(basename "$dir")"
+        [[ -e "$T3_HOME/runtime/versions/$v" ]] || ln -sfn "${dir%/}" "$T3_HOME/runtime/versions/$v"
+    done
+    # Drop links to image versions that no longer exist (after an image update).
+    find "$T3_HOME/runtime/versions" -maxdepth 1 -xtype l -delete 2>/dev/null
+}
+
+newest_t3_runtime() {
+    local d best=""
+    for d in "$T3_HOME/runtime/versions"/*/; do
+        [[ -f "$d/.install-complete" && -x "$d/t3" ]] || continue
+        d="$(basename "$d")"
+        [[ "$d" == *-* ]] && continue   # skip nightly/preview builds unless active
+        if [[ -z "$best" ]] || newer "$d" "$best"; then best="$d"; fi
+    done
+    printf '%s\n' "$best"
+}
+
+update_t3_runtime() {
+    local latest current
+    latest="$(timeout 30 curl -fsSL https://api.github.com/repos/pingdotgg/t3code/releases/latest 2>/dev/null |
+        jq -r '.tag_name // empty' | sed 's/^v//')"
+    [[ -n "$latest" ]] || { log "t3: couldn't check for updates"; return 0; }
+    current="$(newest_t3_runtime)"
+    if newer "$latest" "$current"; then
+        log "t3: installing $latest (have $current)"
+        local bindir; bindir="$(mktemp -d)"
+        timeout 300 env T3CODE_HOME="$T3_HOME" T3CODE_INSTALL_BIN_DIR="$bindir" T3CODE_VERSION="$latest" \
+            sh -c 'curl -fsSL https://t3.codes/install.sh | sh' >/dev/null 2>&1 \
+            || log "t3: install of $latest failed"
+        rm -rf "$bindir"
+    fi
+}
+
+# Keep the active, image and newest runtimes; delete other downloaded ones.
+prune_t3_runtimes() {
+    local keep_active keep_newest d v
+    keep_active="$(jq -r '.activeVersion // empty' "$T3_HOME/runtime/service-state.json" 2>/dev/null)"
+    keep_newest="$(newest_t3_runtime)"
+    for d in "$T3_HOME/runtime/versions"/*/; do
+        v="$(basename "$d")"
+        [[ -L "${d%/}" || "$v" == "$keep_active" || "$v" == "$keep_newest" ]] && continue
+        [[ -e "$IMAGE_T3_VERSIONS/$v" ]] && continue
+        log "t3: removing old runtime $v"
+        rm -rf "${d%/}"
+    done
+}
+
+sync_npm_tools
+sync_t3_runtime
+if [[ "$MODE" != "--sync" ]]; then
+    update_npm_tools
+    update_t3_runtime
+fi
+prune_t3_runtimes
+log "claude-code $(pkg_version "$PREFIX/lib/node_modules/@anthropic-ai/claude-code"), codex $(pkg_version "$PREFIX/lib/node_modules/@openai/codex"), t3 $(newest_t3_runtime) (newest installed)"
+exit 0

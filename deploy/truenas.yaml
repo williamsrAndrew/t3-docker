@@ -42,6 +42,9 @@ services:
 
       # Passwordless sudo for the dev user (and the agents).
       ALLOW_SUDO: "true"
+
+      # Install new T3 Code / Claude Code / Codex releases on every start.
+      AUTO_UPDATE: "true"
       NODE_OPTIONS: "--max-old-space-size=4096"
 
       # Optional: uncomment instead of logging in interactively.

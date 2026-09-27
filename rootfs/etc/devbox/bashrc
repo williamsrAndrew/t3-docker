@@ -17,3 +17,14 @@ PS1='\[\e[35m\]t3-dev\[\e[0m\]:\[\e[34m\]\w\[\e[33m\]$(__git_branch)\[\e[0m\]\$ 
 alias ll='ls -alF --color=auto'
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
+
+# `codex login` opens a localhost:1455 browser callback, which can't finish on a
+# server. T3's setup wizard types exactly `codex login`, so use the device-code
+# flow instead (open a URL, enter a short code; nothing to paste back).
+codex() {
+    if [[ $# -eq 1 && $1 == login ]]; then
+        command codex login --device-auth
+    else
+        command codex "$@"
+    fi
+}

@@ -61,6 +61,9 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
 
          # Passwordless sudo for the dev user (and the agents).
          ALLOW_SUDO: "true"
+
+         # Install new T3 Code / Claude Code / Codex releases on every start.
+         AUTO_UPDATE: "true"
          NODE_OPTIONS: "--max-old-space-size=4096"
 
          # Optional: uncomment instead of logging in interactively.
@@ -133,6 +136,7 @@ docker compose logs -f t3-dev
 |---|---|
 | `t3-pair` | Makes a new pairing link and QR code for the phone or desktop app, or a browser when the login gate is off (`--ttl 2h` to change the expiry) |
 | `devbox-doctor` | Shows tool versions, login status, and whether the volumes are mounted |
+| `devbox-update` | Installs newer T3 Code / Claude Code / Codex releases now (restart T3 to use a new T3 version) |
 | `devbox-mcp-setup` | Re-registers the Playwright MCP server with Claude and Codex |
 | `supervisorctl restart t3code` | Restarts T3 Code (run as root: `docker exec t3-dev supervisorctl ...`) |
 
@@ -144,14 +148,15 @@ Everything under `/home/dev` is on your volume:
 
 | Path | Contents |
 |---|---|
-| `~/.t3` | T3 Code threads, projects, paired devices, settings |
+| `~/.t3` | T3 Code threads, projects, paired devices, settings, and T3 versions installed by updates (`runtime/`) |
 | `~/.claude`, `~/.claude.json` | Claude Code login, settings, memory, MCP servers |
 | `~/.codex` | Codex login and config |
 | `~/.config/gh` | GitHub CLI login |
 | `~/.local/share/com.vercel.cli` | Vercel login |
 | `~/.gitconfig`, `~/.ssh` | Git identity, credential helper, SSH keys |
 | `~/.bash_history`, `~/.bashrc`, `~/.tmux.conf` | Your shell setup (seeded once, never overwritten) |
-| `~/.npm-global`, `~/.bun`, `~/.local/bin`, `~/.cache` | Anything you install yourself with `npm i -g`, `bun add -g`, `uv tool install`, and so on |
+| `~/.npm-global` | Claude Code and Codex (kept up to date here), plus anything you `npm i -g` |
+| `~/.bun`, `~/.local/bin`, `~/.cache` | Anything you install with `bun add -g`, `uv tool install`, and so on |
 
 `/workspace` is your code. Anything else in the container, including `apt install`s, is reset when the image updates. If you need something permanently, add it to the Dockerfile.
 
@@ -170,6 +175,7 @@ Everything under `/home/dev` is on your volume:
 | `TTYD_CREDENTIAL` | — | `user:password` for the web terminal. **Empty disables it.** |
 | `TTYD_ENABLE` | `true` | Set `false` to turn the web terminal off entirely |
 | `ALLOW_SUDO` | `true` | Passwordless sudo for `dev` (and therefore for agents) |
+| `AUTO_UPDATE` | `true` | Install new T3 Code / Claude Code / Codex releases into the home volume on each start |
 | `GIT_USER_NAME` / `GIT_USER_EMAIL` | — | Written to `~/.gitconfig` on every start |
 | `GH_TOKEN` | — | Optional alternative to `gh auth login` |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VERCEL_TOKEN` | — | Optional alternatives to logging in interactively |
@@ -192,11 +198,30 @@ To let TrueNAS pull it:
 
 ## Updating
 
-- **Image** (tools, T3 Code): TrueNAS doesn't detect new `latest` images, and Stop → Start keeps the old container. With `pull_policy: always` in the YAML (the default above), **Apps → t3-dev → Edit → Save** pulls the newest image and recreates the container. Without it, first run `sudo docker pull ghcr.io/williamsrandrew/t3-docker:latest` in the TrueNAS shell, then Edit → Save. Your home volume and workspace are untouched.
-- **Check which version is running:** `sudo docker inspect t3-dev --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'` prints the git commit the image was built from. Compare it with the latest commit on GitHub.
-- **Updating a CLI inside the container** (`claude update`, T3's **Update now**, `npm i -g …`) installs into `~/.npm-global` on the home volume. That copy persists and takes priority over the image's copy. `claude` and `codex` are wrappers (`/usr/local/devbox/bin`) that pass through to whichever copy comes first. The `claude` wrapper also finishes an update that was left without its native binary (the "claude native binary not installed" error). To go back to the image's versions: `rm -rf ~/.npm-global/lib/node_modules/* ~/.npm-global/bin/*`.
-- **Pin a T3 Code version**: build with `--build-arg T3CODE_VERSION=0.0.42`, or pass it to the workflow's manual run.
-- **Bake in more npm CLIs**: `--build-arg EXTRA_NPM_PACKAGES="opencode-ai @google/gemini-cli"`.
+There are three ways updates arrive. You can use any of them.
+
+**1. From the T3 UI**
+- **Claude Code / Codex:** when a new version is out, **Settings → Providers** shows **Update available** with an **Update** button. It installs into `~/.npm-global` on your home volume, so it persists.
+- **T3 Code itself:** T3 runs under its own service launcher, so the T3 apps can update this server in place. You'll see **Update server** when your phone or desktop app is newer than the server, or under **Settings → Environments → Check for updates** in the mobile app. New versions are kept in `~/.t3/runtime`.
+
+**2. Automatically on every container start (`AUTO_UPDATE=true`, the default)**
+- About a minute after startup, `devbox-update` installs any newer Claude Code, Codex and T3 Code releases into the home volume. The logs show a summary line: `[devbox-update] claude-code …, codex …, t3 …`.
+- If T3 Code itself was updated, T3 restarts once to switch over. Running agents are interrupted; turn on **Settings → General → Continue threads after restarts** to resume them.
+- Run `devbox-update` in a terminal to check right away. Set `AUTO_UPDATE=false` to only update when you choose.
+
+**3. New images from GitHub Actions**
+- Every 3 hours, the workflow checks for new T3 Code, Claude Code and Codex releases, and rebuilds and pushes the image only if one changed. The versions are pinned and recorded as image labels. A weekly rebuild (Mondays) also picks up Debian security updates and the other tools.
+- TrueNAS doesn't redeploy by itself. With `pull_policy: always`, **Apps → t3-dev → Edit → Save** pulls the newest image. Your home volume and workspace are untouched.
+
+**Newest wins:** the image ships a copy of each tool. On every start, if the image's copy is newer than the one in your home folder (for example after pulling a new image), the image's copy is used. Otherwise your updated copy is kept.
+
+**Checking versions**
+- Inside the container: `devbox-doctor`, or `claude --version`, `codex --version`, `t3 --version`.
+- The image on TrueNAS: `sudo docker inspect t3-dev --format '{{ json .Config.Labels }}'` shows `dev.t3docker.version.*` (the versions baked into the image) and `org.opencontainers.image.revision` (the git commit).
+
+**Resetting to the image's versions:** `rm -rf ~/.npm-global/lib/node_modules/@anthropic-ai ~/.npm-global/lib/node_modules/@openai`, then restart the container.
+
+**Build options:** `--build-arg T3CODE_VERSION=0.0.42` (also in the workflow's manual run), `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, and `EXTRA_NPM_PACKAGES="opencode-ai @google/gemini-cli"` to bake in more npm CLIs.
 
 ## Security notes
 
