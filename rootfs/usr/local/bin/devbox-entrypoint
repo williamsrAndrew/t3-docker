@@ -42,6 +42,9 @@ if [[ "$(cat "$stamp" 2>/dev/null)" != "$PUID:$PGID" ]]; then
     echo "$PUID:$PGID" > "$stamp"
     chown "$PUID:$PGID" "$stamp"
 fi
+# Anything created in the home dir by root (e.g. an earlier `docker exec` as root)
+# would be unreadable for dev; hand it back.
+find "$HOME_DIR" -xdev \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$PUID:$PGID" {} + 2>/dev/null || true
 # /workspace holds your code: only fix the top-level dir, never recurse.
 [[ -d /workspace ]] && chown "$PUID:$PGID" /workspace 2>/dev/null || true
 

@@ -123,8 +123,9 @@ RUN ttyd --port 7999 --interface lo true & pid=$!; \
     && mv /tmp/ttyd-patched.html /usr/local/share/devbox/ttyd-index.html \
     && rm -f /tmp/ttyd.html
 
-ENV HOME=/home/dev \
-    SHELL=/bin/bash \
+# No HOME here: `docker exec` as root keeps /root, so it can't leave root-owned
+# files in the dev user's home. `docker exec -u dev` gets /home/dev from passwd.
+ENV SHELL=/bin/bash \
     TZ=UTC \
     PUID=1000 \
     PGID=1000 \
@@ -151,7 +152,7 @@ ENV HOME=/home/dev \
     # user-level installs land on the persistent volume and win over image versions
     NPM_CONFIG_PREFIX=/home/dev/.npm-global \
     BUN_INSTALL=/home/dev/.bun \
-    PATH=/home/dev/.local/bin:/home/dev/.npm-global/bin:/home/dev/.bun/bin:/usr/local/devbox/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/usr/local/devbox/bin:/home/dev/.local/bin:/home/dev/.npm-global/bin:/home/dev/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     # image-managed CLIs are updated by rebuilding, not in place
     DISABLE_AUTOUPDATER=1 \
     # browsers

@@ -194,7 +194,7 @@ To let TrueNAS pull it:
 
 - **Image** (tools, T3 Code): TrueNAS doesn't detect new `latest` images, and Stop → Start keeps the old container. With `pull_policy: always` in the YAML (the default above), **Apps → t3-dev → Edit → Save** pulls the newest image and recreates the container. Without it, first run `sudo docker pull ghcr.io/williamsrandrew/t3-docker:latest` in the TrueNAS shell, then Edit → Save. Your home volume and workspace are untouched.
 - **Check which version is running:** `sudo docker inspect t3-dev --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'` prints the git commit the image was built from. Compare it with the latest commit on GitHub.
-- **In-place updates inside the container are lost on recreate.** Claude's auto-updater is disabled for that reason. An `npm i -g` you run yourself goes to `~/.npm-global` and *does* persist, and it takes priority over the image's copy. `rm -rf ~/.npm-global/*` returns you to the image versions.
+- **Updating a CLI inside the container** (`claude update`, T3's **Update now**, `npm i -g …`) installs into `~/.npm-global` on the home volume. That copy persists and takes priority over the image's copy. `claude` and `codex` are wrappers (`/usr/local/devbox/bin`) that pass through to whichever copy comes first. The `claude` wrapper also finishes an update that was left without its native binary (the "claude native binary not installed" error). To go back to the image's versions: `rm -rf ~/.npm-global/lib/node_modules/* ~/.npm-global/bin/*`.
 - **Pin a T3 Code version**: build with `--build-arg T3CODE_VERSION=0.0.42`, or pass it to the workflow's manual run.
 - **Bake in more npm CLIs**: `--build-arg EXTRA_NPM_PACKAGES="opencode-ai @google/gemini-cli"`.
 
