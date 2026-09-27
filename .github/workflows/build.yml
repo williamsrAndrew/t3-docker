@@ -62,8 +62,13 @@ jobs:
         id: compare
         run: |
           want="${{ steps.latest.outputs.t3code }}|${{ steps.latest.outputs.claude }}|${{ steps.latest.outputs.codex }}"
-          labels="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Image}}' 2>/dev/null \
-            | jq -c '[.. | objects | select(has("Labels")) | .Labels] | map(select(. != null)) | first // {}' || echo '{}')"
+          # The image is an index (image + provenance attestation); read the amd64 config.
+          if raw="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json (index .Image "linux/amd64")}}' 2>err.txt)"; then
+            labels="$(jq -c '.config.Labels // {}' <<<"$raw")"
+          else
+            echo "::warning::could not read published image labels: $(cat err.txt)"
+            labels='{}'
+          fi
           have="$(jq -r '[."dev.t3docker.version.t3code", ."dev.t3docker.version.claude-code", ."dev.t3docker.version.codex"] | map(. // "") | join("|")' <<<"$labels")"
           echo "published: $have" && echo "latest:    $want"
           if [ "$have" = "$want" ]; then
