@@ -8,6 +8,7 @@ services:
     shm_size: 2g                  # Chromium needs more than Docker's 64MB default
     ports:
       - "3773:3773"               # T3 Code web UI
+      - "7681:7681"               # web terminal (ttyd)
       - "3000:3000"               # one dev-server preview port (run your app on 3000, host 0.0.0.0)
     volumes:
       # Home dir: T3 threads + paired devices, Claude/Codex/gh/Vercel logins,
@@ -30,6 +31,10 @@ services:
       T3_LOGIN_USER: "dev"
       T3_LOGIN_PASSWORD: "CHANGE-ME"                    # CHANGE
       T3_LOGIN_DAYS: "365"                              # how long a browser stays signed in
+
+      # Web terminal login (user:password). Empty = web terminal disabled.
+      TTYD_CREDENTIAL: "dev:CHANGE-ME"                  # CHANGE
+      TTYD_ENABLE: "true"
 
       # Git identity for commits made in the container.
       GIT_USER_NAME: "Your Name"                        # CHANGE

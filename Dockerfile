@@ -3,6 +3,7 @@
 # t3-docker — a remote development box built around T3 Code.
 #
 #   T3 Code server (port 3773)  ─ web UI + agent orchestration
+#   ttyd web terminal (7681)    ─ tmux shell in the browser, for logins and odd jobs
 #   Claude Code, Codex, gh, vercel, node/npm/pnpm/bun, python/uv, headless Chromium
 #
 # Everything is installed outside /home/dev so the home directory can be a
@@ -18,6 +19,7 @@ ARG T3CODE_CHANNEL=stable
 # npm versions of the agent CLIs ("latest" or exact). CI passes exact versions.
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
+ARG TTYD_VERSION=1.7.7
 ARG YQ_VERSION=v4.53.6
 # Extra global npm packages to bake in, space separated (e.g. "opencode-ai @google/gemini-cli").
 ARG EXTRA_NPM_PACKAGES=""
@@ -58,10 +60,21 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# ── yq (static binary) ───────────────────────────────────────────────────────
-RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH:-amd64}" \
+# ── Static binaries: ttyd, yq ────────────────────────────────────────────────
+RUN case "${TARGETARCH:-amd64}" in \
+        amd64) ttyd_arch=x86_64 ;; \
+        arm64) ttyd_arch=aarch64 ;; \
+        *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && curl -fsSLO "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${ttyd_arch}" \
+    && curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/SHA256SUMS" \
+        | grep " ttyd.${ttyd_arch}\$" | sha256sum -c - \
+    && install -m 0755 "ttyd.${ttyd_arch}" /usr/local/bin/ttyd \
+    && curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH:-amd64}" \
         -o /usr/local/bin/yq \
-    && chmod 0755 /usr/local/bin/yq
+    && chmod 0755 /usr/local/bin/yq \
+    && rm -f /tmp/ttyd.*
 
 # ── Bun + uv (installed system-wide) ─────────────────────────────────────────
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash \
@@ -99,7 +112,19 @@ RUN usermod -l dev -d /home/dev -m -s /bin/bash node \
     && chown dev:dev /workspace
 
 COPY --chmod=0755 rootfs/usr/local/bin/ /usr/local/bin/
+COPY rootfs/usr/local/share/devbox/ /usr/local/share/devbox/
 COPY rootfs/etc/ /etc/
+
+# ttyd's built-in page + a small script that makes Ctrl+V paste.
+RUN ttyd --port 7999 --interface lo true & pid=$!; \
+    for _ in $(seq 40); do curl -fsS http://127.0.0.1:7999/ -o /tmp/ttyd.html && break; sleep 0.25; done; \
+    kill "$pid"; \
+    grep -q '</body>' /tmp/ttyd.html \
+    && perl -0pe 'BEGIN { local $/; open F, "/usr/local/share/devbox/ttyd-paste.html" or die; $js = <F> } s{</body>}{$js</body>}' \
+        /tmp/ttyd.html > /tmp/ttyd-patched.html \
+    && grep -q 'plainCtrlV' /tmp/ttyd-patched.html \
+    && mv /tmp/ttyd-patched.html /usr/local/share/devbox/ttyd-index.html \
+    && rm -f /tmp/ttyd.html
 
 # No HOME here: `docker exec` as root keeps /root, so it can't leave root-owned
 # files in the dev user's home. `docker exec -u dev` gets /home/dev from passwd.
@@ -119,6 +144,10 @@ ENV SHELL=/bin/bash \
     T3_LOGIN_PASSWORD="" \
     T3_LOGIN_DAYS=365 \
     T3_INTERNAL_PORT=3772 \
+    # web terminal
+    TTYD_ENABLE=true \
+    TTYD_PORT=7681 \
+    TTYD_CREDENTIAL="" \
     # container behaviour
     ALLOW_SUDO=true \
     GIT_USER_NAME="" \
@@ -141,7 +170,7 @@ ENV SHELL=/bin/bash \
     NODE_OPTIONS=--max-old-space-size=4096
 
 WORKDIR /workspace
-EXPOSE 3773
+EXPOSE 3773 7681
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${T3CODE_PORT}/health" >/dev/null || exit 1

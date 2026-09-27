@@ -12,6 +12,7 @@ services:
     shm_size: 2g           # Chromium needs more than Docker's 64MB default
     ports:
       - "${T3CODE_PORT:-3773}:3773"   # T3 Code web UI / API
+      - "${TTYD_PORT:-7681}:7681"     # web terminal
       - "${DEV_PORT:-3000}:3000"      # one dev-server preview port (run your app on 3000, host 0.0.0.0)
     volumes:
       # Everything in the dev user's home persists: T3 Code state (~/.t3),
