@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs as root under tini. Prepares the `dev` user and persistent home, then
-# hands off to supervisord, which runs T3 Code and ttyd as `dev`.
+# hands off to supervisord, which runs T3 Code as `dev`.
 set -euo pipefail
 
 log() { printf '[devbox] %s\n' "$*"; }
@@ -79,13 +79,6 @@ if [[ ! -f "$HOME_DIR/.config/devbox-mcp-done" ]]; then
         || log "MCP setup failed; run 'devbox-mcp-setup' manually"
 fi
 
-# ── web terminal ─────────────────────────────────────────────────────────────
-if [[ "${TTYD_ENABLE,,}" == "true" && -z "${TTYD_CREDENTIAL:-}" ]]; then
-    log "WARNING: TTYD_CREDENTIAL is empty, so the web terminal is disabled."
-    log "         Set TTYD_CREDENTIAL=user:password to enable it."
-    export TTYD_ENABLE=false
-fi
-export TTYD_AUTOSTART="${TTYD_ENABLE,,}"
 
 # ── optional login gate ──────────────────────────────────────────────────────
 if [[ -n "${T3_LOGIN_PASSWORD:-}" ]]; then
@@ -101,5 +94,5 @@ if [[ -z "${T3_PUBLIC_URL:-}" ]]; then
     log "NOTE: T3_PUBLIC_URL is unset; pairing links will use a guessed address."
 fi
 
-log "starting services (T3 Code on :$T3_SERVER_PORT, ttyd on :$TTYD_PORT enabled=$TTYD_AUTOSTART)"
+log "starting services (T3 Code on :$T3_SERVER_PORT)"
 exec /usr/bin/supervisord -n -c /etc/supervisor/devbox.conf

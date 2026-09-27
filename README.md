@@ -5,7 +5,6 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
 | What | Where |
 |---|---|
 | T3 Code web UI + server | `:3773` |
-| Web terminal (ttyd + tmux, basic auth) | `:7681` |
 | Dev-server preview | `:3000` |
 
 **Included:** T3 Code, Claude Code, Codex, GitHub CLI, Vercel CLI, Node 24 LTS, npm, pnpm, bun, TypeScript/tsx, Python 3 + uv, a build toolchain, headless Chromium with a Playwright MCP server already registered for Claude and Codex, and git/git-lfs, ripgrep, fd, fzf, bat, jq, yq, tmux, htop, shellcheck, sqlite3, psql and redis-cli.
@@ -27,7 +26,6 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
        shm_size: 2g                  # Chromium needs more than Docker's 64MB default
        ports:
          - "3773:3773"               # T3 Code web UI
-         - "7681:7681"               # web terminal (ttyd)
          - "3000:3000"               # one dev-server preview port (run your app on 3000, host 0.0.0.0)
        volumes:
          # Home dir: T3 threads + paired devices, Claude/Codex/gh/Vercel logins,
@@ -50,10 +48,6 @@ A self-hosted remote development box built around [T3 Code](https://github.com/p
          T3_LOGIN_USER: "dev"
          T3_LOGIN_PASSWORD: "CHANGE-ME"                    # CHANGE
          T3_LOGIN_DAYS: "365"                              # how long a browser stays signed in
-
-         # Web terminal login (user:password). Empty = web terminal disabled.
-         TTYD_CREDENTIAL: "dev:CHANGE-ME"                  # CHANGE
-         TTYD_ENABLE: "true"
 
          # Git identity for commits made in the container.
          GIT_USER_NAME: "Your Name"                        # CHANGE
@@ -115,12 +109,11 @@ To see or revoke paired devices, go to **Settings → Connections** in the web U
 
 - **Pasting.**
   - In **T3's terminal**: **Ctrl+Shift+V** or **Shift+Insert** on Windows/Linux, **Cmd+V** on Mac. Plain Ctrl+V goes to the program, as it does in desktop terminals.
-  - In the **web terminal (ttyd)**: plain **Ctrl+V** pastes too.
   - Right-click → Paste may not work, because browsers disable the clipboard API on plain-HTTP pages.
 - **Claude's "Paste code here" prompt shows nothing as you paste or type.** That's normal: the code is hidden like a password. Paste once and press Enter.
 - **Claude may show as "Authenticated" in T3 before you've signed in.** T3's check only confirms the CLI starts. If there's no Sign in button, run `claude auth login` in a terminal anyway. `claude auth status` shows the real state.
+- **If T3 itself won't start**, get a shell from the TrueNAS shell with `sudo docker exec -it -u dev t3-dev bash -l`.
 - **`codex login` automatically uses the device-code flow** (`--device-auth`). The normal flow expects a browser on the same machine and can't finish on a server.
-- The web terminal on `:7681` is a fallback for when T3 isn't running. Set `TTYD_ENABLE=false` if you don't need it.
 
 ## Quick start (plain Docker)
 
@@ -172,8 +165,6 @@ Everything under `/home/dev` is on your volume:
 | `T3_LOGIN_USER` | `dev` | Login gate username |
 | `T3_LOGIN_DAYS` | `365` | How long a browser stays signed in through the gate |
 | `T3_INTERNAL_PORT` | `3772` | Internal T3 port when the gate is on (not published) |
-| `TTYD_CREDENTIAL` | — | `user:password` for the web terminal. **Empty disables it.** |
-| `TTYD_ENABLE` | `true` | Set `false` to turn the web terminal off entirely |
 | `ALLOW_SUDO` | `true` | Passwordless sudo for `dev` (and therefore for agents) |
 | `AUTO_UPDATE` | `true` | Install new T3 Code / Claude Code / Codex releases into the home volume on each start |
 | `GIT_USER_NAME` / `GIT_USER_EMAIL` | — | Written to `~/.gitconfig` on every start |
@@ -181,7 +172,7 @@ Everything under `/home/dev` is on your volume:
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VERCEL_TOKEN` | — | Optional alternatives to logging in interactively |
 | `NODE_OPTIONS` | `--max-old-space-size=4096` | Node heap size |
 | `CHOKIDAR_USEPOLLING`, `WATCHPACK_POLLING` | — | Set `true` if `/workspace` is on SMB/NFS and hot reload misses changes |
-| `T3CODE_PORT`, `TTYD_PORT` | `3773`, `7681` | Internal ports (change the published ports instead) |
+| `T3CODE_PORT` | `3773` | Internal port (change the published port instead) |
 
 **Dev-server preview:** one port, `3000`, is published so you can open a running app from your laptop. Start the app on that port, listening on all interfaces: `vite --host 0.0.0.0 --port 3000`, `next dev -H 0.0.0.0 -p 3000`, or `PORT=3000 HOST=0.0.0.0 npm start`. Then open `http://192.168.2.30:3000`. Agents don't need it: they test apps inside the container with the built-in headless Chromium. If 3000 is taken on TrueNAS, change only the left side (for example `"3100:3000"`), or remove the line.
 
@@ -235,6 +226,5 @@ There are three ways updates arrive. You can use any of them.
 ## Security notes
 
 - T3 Code only accepts paired devices or logged-in browsers, but the connection is **plain HTTP**. Keep it on your LAN or VPN, and don't port-forward it to the internet. For remote access, T3's built-in `t3 connect` or Tailscale are the supported routes.
-- ttyd uses HTTP basic auth over plain HTTP, and it gives a shell with (by default) sudo. Use a strong password, or set `TTYD_ENABLE=false` once your logins are done.
 - The server's startup logs contain a live pairing token. Treat the logs as sensitive.
 - Chromium runs with `--no-sandbox`. The container is the sandbox, so no extra privileges or `seccomp=unconfined` are needed.
