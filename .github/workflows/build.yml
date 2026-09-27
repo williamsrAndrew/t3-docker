@@ -7,8 +7,9 @@ on:
     paths-ignore: ["**.md", "deploy/**"]
   pull_request:
   schedule:
-    # Every 3 hours: rebuild only if T3 Code, Claude Code or Codex released a new version.
-    - cron: "23 */3 * * *"
+    # Daily: rebuild only if T3 Code, Claude Code or Codex released a new version.
+    # (The container also updates these itself; see AUTO_UPDATE.)
+    - cron: "23 10 * * *"
     # Weekly: full rebuild without cache, for Debian security updates and the other tools.
     - cron: "0 9 * * 1"
   workflow_dispatch:

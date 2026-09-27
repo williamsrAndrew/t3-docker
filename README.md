@@ -210,7 +210,7 @@ There are three ways updates arrive. You can use any of them.
 - Run `devbox-update` in a terminal to check right away. Set `AUTO_UPDATE=false` to only update when you choose.
 
 **3. New images from GitHub Actions**
-- Every 3 hours, the workflow checks for new T3 Code, Claude Code and Codex releases, and rebuilds and pushes the image only if one changed. The versions are pinned and recorded as image labels. A weekly rebuild (Mondays) also picks up Debian security updates and the other tools.
+- Once a day (10:23 UTC), the workflow checks for new T3 Code, Claude Code and Codex releases, and rebuilds and pushes the image only if one changed. The versions are pinned and recorded as image labels. A weekly rebuild (Mondays) also picks up Debian security updates and the other tools.
 - TrueNAS doesn't redeploy by itself. With `pull_policy: always`, **Apps → t3-dev → Edit → Save** pulls the newest image. Your home volume and workspace are untouched.
 
 **Newest wins:** the image ships a copy of each tool. On every start, if the image's copy is newer than the one in your home folder (for example after pulling a new image), the image's copy is used. Otherwise your updated copy is kept.
