@@ -13,17 +13,17 @@ services:
     volumes:
       # Home dir: T3 threads + paired devices, Claude/Codex/gh/Vercel logins,
       # git config, SSH keys, shell history, your own global installs.
-      - /mnt/tank/apps/t3-dev/home:/home/dev            # CHANGE pool/path
+      - /mnt/POOL/apps/t3-dev/home:/home/dev            # CHANGE pool/path
       # Your projects.
-      - /mnt/tank/apps/t3-dev/workspace:/workspace      # CHANGE pool/path
+      - /mnt/POOL/apps/t3-dev/workspace:/workspace      # CHANGE pool/path
     environment:
       # Container user: must match the owner of the two datasets above.
       PUID: "568"                                       # TrueNAS "apps" user
       PGID: "568"                                       # TrueNAS "apps" group
-      TZ: "America/Chicago"                             # CHANGE
+      TZ: "Etc/UTC"                                     # CHANGE
 
       # T3 Code: the address your devices use; pairing links point here.
-      T3_PUBLIC_URL: "http://192.168.2.30:3773"
+      T3_PUBLIC_URL: "http://your-nas-ip:3773"          # CHANGE
       T3_PAIR_TTL: "30m"
 
       # Username/password login for browsers instead of pairing links.
@@ -33,7 +33,9 @@ services:
       T3_LOGIN_DAYS: "365"                              # how long a browser stays signed in
 
       # Web terminal login (user:password). Empty = web terminal disabled.
-      TTYD_CREDENTIAL: "dev:CHANGE-ME"                  # CHANGE
+      # It's a sudo shell behind basic auth over plain HTTP; T3 has its own
+      # terminal, so only set this if you need it (see README → Security).
+      TTYD_CREDENTIAL: ""
       TTYD_ENABLE: "true"
 
       # Git identity for commits made in the container.
