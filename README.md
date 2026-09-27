@@ -160,6 +160,18 @@ Everything under `/home/dev` is on your volume:
 
 `/workspace` is your code. Anything else in the container, including `apt install`s, is reset when the image updates. If you need something permanently, add it to the Dockerfile.
 
+## Headless browser (Chromium)
+
+The image includes Chromium (about 390 MB with its fonts) so **agents can use a browser inside the container**:
+
+- **For Claude Code and Codex.** A [Playwright MCP](https://github.com/microsoft/playwright-mcp) server is registered for both on first start. It lets them open pages, click, fill forms, take screenshots and read console errors, so they can check their own web work. It runs headless and isolated, so there are no saved logins between sessions. Run `devbox-mcp-setup` to register it again, for example after resetting `~/.claude`.
+- **For your project's tools.** `CHROME_PATH` and `PUPPETEER_EXECUTABLE_PATH` point at it, so Puppeteer and similar tools use it rather than downloading their own. A project's own Playwright test setup still installs its own browsers into `~/.cache/ms-playwright`.
+- **It sees the container's network.** Agents can open a dev server at `http://localhost:<port>` without publishing any ports.
+
+**This is not T3's Browser panel** (**Settings → Integrations → Browser**). That panel is built into the T3 **desktop app** and runs on the computer you're viewing from, which is why the web UI says it's desktop-only. To use it, connect the T3 desktop app to this server; agents can then drive that browser through T3's preview tools. It loads pages from your computer, so the app you're previewing must be reachable from there. That's what the published port 3000 is for (see **Dev-server preview** below).
+
+Chromium needs `shm_size: 2g` (already in the compose files) and runs with `--no-sandbox`; see [Security notes](#security-notes).
+
 ## Environment variables
 
 | Variable | Default | Purpose |
