@@ -196,6 +196,15 @@ To let TrueNAS pull it:
    - **Apps → Configuration → Manage Container Image Registries** → add `ghcr.io` with your GitHub username and the token (if your TrueNAS version has this screen), or
    - in **System → Shell**: `sudo docker login ghcr.io -u williamsrAndrew` and paste the token as the password.
 
+## TrueNAS "Update available" badge
+
+TrueNAS checks the images of custom apps (YAML or the Custom App form, same thing) against their registry, and shows **Update available** plus an **Update** button when `latest` moves. For a **private** image it needs registry credentials that TrueNAS itself stores. A `docker login` in the shell isn't used by this check.
+
+- **TrueNAS 26.0 or newer:** go to **Apps → Configuration → Docker Registries** (or **Sign-in to a Docker registry**) and add `ghcr.io` with your GitHub username and a classic token with `read:packages`. Leave **Check for docker image updates** on in the Apps settings.
+- **TrueNAS 25.10 or older:** the update check can't use registry credentials, so a private GHCR image never shows the badge. Either upgrade, or make the *package* public: GitHub → your profile → **Packages → t3-docker → Package settings → Change visibility**. The repo can stay private. The image contains no secrets, since passwords come from your app's environment settings.
+
+Check your version with `cat /etc/version` in the TrueNAS shell. The check runs periodically, so the badge can take a while to appear after a new image is pushed.
+
 ## Updating
 
 There are three ways updates arrive. You can use any of them.
