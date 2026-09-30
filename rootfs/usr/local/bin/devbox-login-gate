@@ -135,6 +135,15 @@ async function loadUpstreamToken() {
 // ── request classification ───────────────────────────────────────────────────
 // Paths T3 authenticates on its own (pairing, app sign-in, discovery, health).
 const NATIVE_PATHS = ["/api/auth/", "/oauth/", "/.well-known/", "/health"];
+// T3's app icons, which it serves publicly. Let them through so the login page
+// and the browser tab show the T3 logo before sign-in.
+const PUBLIC_ICON_PATHS = new Set([
+  "/favicon.ico",
+  "/favicon-16x16.png",
+  "/favicon-32x32.png",
+  "/apple-touch-icon.png",
+  "/manifest.webmanifest",
+]);
 
 function carriesT3Credentials(req) {
   if (req.headers.authorization || req.headers.dpop) return true;
@@ -169,6 +178,7 @@ function loginPage(res, { error = "", next = "/" } = {}, status = 200) {
   });
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · T3 Code</title>
+<link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
 :root{color-scheme:light dark;--bg:#fafafa;--card:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#4f46e5}
 @media (prefers-color-scheme:dark){:root{--bg:#0a0a0a;--card:#161616;--fg:#f2f2f2;--muted:#999;--line:#2a2a2a;--accent:#818cf8}}
@@ -273,6 +283,10 @@ async function main() {
     const path = req.url.split("?")[0];
     if (path === PREFIX) return void handleLogin(req, res).catch(() => loginPage(res, {}, 500));
     if (path === `${PREFIX}/logout`) return handleLogout(res);
+    if (req.method === "GET" && PUBLIC_ICON_PATHS.has(path)) {
+      const { authorization, cookie, dpop, ...headers } = req.headers;
+      return proxy(req, res, headers);
+    }
 
     if (validCookie(parseCookies(req.headers.cookie)[COOKIE])) return proxy(req, res, withGateAuth(req.headers, token));
     if (carriesT3Credentials(req)) return proxy(req, res, req.headers);
