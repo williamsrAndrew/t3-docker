@@ -24,6 +24,8 @@ const DAYS = Number(process.env.T3_LOGIN_DAYS || 365);
 const STATE_DIR = process.env.T3CODE_HOME || `${process.env.HOME}/.t3`;
 const TOKEN_FILE = `${STATE_DIR}/devbox-login-token`;
 const SECRET_FILE = `${STATE_DIR}/devbox-login-secret`;
+const TOKEN_META_FILE = `${STATE_DIR}/devbox-login-token.json`;
+const SERVICE_STATE_FILE = `${STATE_DIR}/runtime/service-state.json`;
 const COOKIE = "devbox_login";
 const PREFIX = "/__login";
 
@@ -115,21 +117,55 @@ async function tokenIsValid(token) {
   }
 }
 
-// Reuses the saved token; mints a new one if it was revoked, expired, or the
-// T3 database was wiped.
+// The T3 version a token was issued under. T3 never widens a stored token's
+// scopes when a release adds new ones, so a token from an older version keeps
+// working but is missing newer permissions. Re-mint whenever the version changes.
+const activeT3Version = () => {
+  try {
+    return JSON.parse(fs.readFileSync(SERVICE_STATE_FILE, "utf8")).activeVersion || "";
+  } catch {
+    return "";
+  }
+};
+
+function readTokenMeta() {
+  try {
+    return JSON.parse(fs.readFileSync(TOKEN_META_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function issueToken() {
+  const issued = JSON.parse(
+    execFileSync("t3", ["auth", "session", "issue", "--ttl", "3650d", "--label", "login-gate", "--json"], {
+      encoding: "utf8",
+    }),
+  );
+  fs.writeFileSync(TOKEN_FILE, issued.token, { mode: 0o600 });
+  fs.writeFileSync(TOKEN_META_FILE, JSON.stringify({ sessionId: issued.sessionId, t3Version: activeT3Version() }), {
+    mode: 0o600,
+  });
+  return issued;
+}
+
+// Reuses the saved token; mints a new one if it was revoked, expired, the T3
+// database was wiped, or T3 has been upgraded since it was issued.
 async function loadUpstreamToken() {
   while ((await upstreamGet("/health")).status === 0) await sleep(1000);
-  let token = fs.existsSync(TOKEN_FILE) ? fs.readFileSync(TOKEN_FILE, "utf8").trim() : "";
-  if (!token || !(await tokenIsValid(token))) {
-    token = execFileSync(
-      "t3",
-      ["auth", "session", "issue", "--ttl", "3650d", "--label", "login-gate", "--token-only"],
-      { encoding: "utf8" },
-    ).trim();
-    fs.writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
-    log("issued a new T3 session token for the login gate");
+  const token = fs.existsSync(TOKEN_FILE) ? fs.readFileSync(TOKEN_FILE, "utf8").trim() : "";
+  const meta = readTokenMeta();
+  const version = activeT3Version();
+  if (token && meta.t3Version === version && (await tokenIsValid(token))) return token;
+
+  const issued = issueToken();
+  if (meta.sessionId && meta.sessionId !== issued.sessionId) {
+    try {
+      execFileSync("t3", ["auth", "session", "revoke", meta.sessionId], { stdio: "ignore" });
+    } catch {}
   }
-  return token;
+  log(`issued a new T3 session token for the login gate${version ? ` (T3 Code ${version})` : ""}`);
+  return issued.token;
 }
 
 // ── request classification ───────────────────────────────────────────────────
@@ -277,7 +313,24 @@ function proxyUpgrade(req, client, head, headers) {
 }
 
 async function main() {
-  const token = await loadUpstreamToken();
+  let token = await loadUpstreamToken();
+  let version = activeT3Version();
+
+  // T3 can update itself in place while the gate keeps running; pick up the
+  // new version's permissions without needing a gate restart.
+  let refreshing = false;
+  setInterval(async () => {
+    if (refreshing || activeT3Version() === version) return;
+    refreshing = true;
+    try {
+      token = await loadUpstreamToken();
+      version = activeT3Version();
+    } catch (err) {
+      log(`could not refresh the T3 token: ${err.message || err}`);
+    } finally {
+      refreshing = false;
+    }
+  }, 60_000).unref();
 
   const server = http.createServer((req, res) => {
     const path = req.url.split("?")[0];
