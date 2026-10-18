@@ -65,7 +65,7 @@ browser ─► :3773 login gate ─► T3 Code on internal :3772 (not published)
 - The cookie survives container restarts and image updates. Changing the username or password signs every browser out. To sign one browser out, go to `/__login/logout`.
 - The login allows 5 failed attempts per IP address per 15 minutes.
 - The **phone and desktop apps** still pair with a QR code from `t3-pair`. The gate passes their requests straight through, and T3 checks them itself.
-- The gate's T3 token shows up as `login-gate` under **Settings → Connections**. If you revoke it, every browser gets locked out until the gate issues a new one: run `supervisorctl restart login-gate` as root, or restart the container.
+- The gate's T3 token shows up as `login-gate` under **Settings → Connections**. Whenever T3 Code is updated, the gate replaces it with a new token so it gets any permissions the new version added. If you revoke it, every browser gets locked out until the gate issues a new one: run `supervisorctl restart login-gate` as root, or restart the container.
 - Read [what the login gate does and doesn't protect against](#security) first.
 
 ### Pairing links (T3's built-in method)
