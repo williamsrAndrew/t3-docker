@@ -23,7 +23,9 @@ if [[ "$(id -g dev)" != "$PGID" ]]; then
 fi
 if [[ "$(id -u dev)" != "$PUID" ]]; then
     log "setting dev uid to $PUID"
-    usermod -o -u "$PUID" dev
+    # Not `usermod -u`: it re-owns every file in the home volume on each start
+    # (the image's uid is always 1000). Ownership is handled below instead.
+    sed -i -E "s/^(dev:[^:]*:)[0-9]+:/\1$PUID:/" /etc/passwd
 fi
 
 # ── persistent home ──────────────────────────────────────────────────────────
@@ -43,8 +45,10 @@ if [[ "$(cat "$stamp" 2>/dev/null)" != "$PUID:$PGID" ]]; then
     chown "$PUID:$PGID" "$stamp"
 fi
 # Anything created in the home dir by root (e.g. an earlier `docker exec` as root)
-# would be unreadable for dev; hand it back.
-find "$HOME_DIR" -xdev \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$PUID:$PGID" {} + 2>/dev/null || true
+# would be unreadable for dev; hand it back. This walks the whole home volume,
+# which is slow on a cold cache, so it runs in the background, not before startup.
+nice -n 19 find "$HOME_DIR" -xdev \( ! -user "$PUID" -o ! -group "$PGID" \) \
+    -exec chown -h "$PUID:$PGID" {} + >/dev/null 2>&1 &
 # /workspace holds your code: only fix the top-level dir, never recurse.
 [[ -d /workspace ]] && chown "$PUID:$PGID" /workspace 2>/dev/null || true
 
