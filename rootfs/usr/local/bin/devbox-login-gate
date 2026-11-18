@@ -170,7 +170,11 @@ async function loadUpstreamToken() {
 
 // ── request classification ───────────────────────────────────────────────────
 // Paths T3 authenticates on its own (pairing, app sign-in, discovery, health).
-const NATIVE_PATHS = ["/api/auth/", "/oauth/", "/.well-known/", "/health"];
+// /api/assets/ and /api/attachments/upload/ are signed, expiring URLs that T3
+// hands out for images, files and uploads. The apps load them without an
+// Authorization header (e.g. a native <Image>), so the token in the path is
+// the only credential, and T3 checks it.
+const NATIVE_PATHS = ["/api/auth/", "/oauth/", "/.well-known/", "/health", "/api/assets/", "/api/attachments/upload/"];
 // T3's app icons, which it serves publicly. Let them through so the login page
 // and the browser tab show the T3 logo before sign-in.
 const PUBLIC_ICON_PATHS = new Set([
