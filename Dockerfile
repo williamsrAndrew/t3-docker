@@ -20,7 +20,7 @@ ARG T3CODE_CHANNEL=stable
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
 ARG TTYD_VERSION=1.7.7
-ARG YQ_VERSION=v4.53.6
+ARG YQ_VERSION=v4.54.3
 # Extra global npm packages to bake in, space separated (e.g. "opencode-ai @google/gemini-cli").
 ARG EXTRA_NPM_PACKAGES=""
 
